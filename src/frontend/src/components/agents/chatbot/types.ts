@@ -2,6 +2,16 @@
  * Common type definitions for chat components
  */
 
+/**
+ * Represents a file attachment in a chat message
+ */
+export interface IFileAttachment {
+  name: string;
+  type: string;  // MIME type
+  data: string;  // Base64-encoded content
+  previewUrl?: string;  // For displaying image previews
+}
+
 export interface IFileEntity {
   id: string;
   name: string;
@@ -34,6 +44,7 @@ export interface IChatItem {
   fileReferences?: Map<string, any>;
   duration?: number;
   message_files?: IFileEntity[];
+  attachments?: IFileAttachment[];  // File attachments for this message
   usageInfo?: {
     prompt_tokens: number;
     completion_tokens: number;
@@ -45,7 +56,7 @@ export interface IChatItem {
 }
 
 export interface ChatInputProps {
-  onSubmit: (message: string) => void;
+  onSubmit: (message: string, attachments?: IFileAttachment[]) => void;
   isGenerating: boolean;
   currentUserMessage?: string;
 }

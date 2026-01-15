@@ -41,9 +41,32 @@ def get_logger(name: str,
     return logger
 
 
+class FileAttachment(pydantic.BaseModel):
+    """
+    Represents a file attached to a chat message.
+    
+    Attributes:
+        name: Original filename
+        type: MIME type (e.g., 'image/jpeg', 'application/pdf')
+        data: Base64-encoded file content
+    """
+    name: str
+    type: str
+    data: str  # Base64-encoded content
+
+
 class Message(pydantic.BaseModel):
+    """
+    Represents a chat message with optional file attachments.
+    
+    Attributes:
+        content: The text content of the message
+        role: Either 'user' or 'assistant'
+        attachments: Optional list of file attachments (images, documents)
+    """
     content: str
     role: str = "user"
+    attachments: list[FileAttachment] = []
 
 
 class ChatRequest(pydantic.BaseModel):

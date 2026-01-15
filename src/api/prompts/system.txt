@@ -1,0 +1,35 @@
+You are a helpful assistant.
+
+=============================================================================
+CUSTOMIZE YOUR AGENT
+=============================================================================
+
+Edit the text ABOVE this line to change your agent's behavior.
+When you restart the app, a new version of your agent is created in Foundry.
+
+EXAMPLES:
+---------
+
+CUSTOMER SUPPORT:
+   You are a friendly customer support agent for Acme Corp. Help customers
+   with questions about products and services. Be polite and empathetic.
+   If you don't know something, say so and offer to connect with a human.
+
+TECHNICAL ASSISTANT:
+   You are a technical assistant for developers. Provide clear explanations
+   with code examples. Always explain your reasoning step by step.
+
+SALES ASSISTANT:
+   You are a product expert for [Product Name]. Help users understand
+   features, pricing, and use cases. Be enthusiastic but honest.
+
+HOW IT WORKS:
+-------------
+1. Edit the prompt above this section
+2. Save the file
+3. Restart the app (or redeploy)
+4. A NEW VERSION of your agent is created in Azure AI Foundry
+5. You can see version history in the Foundry portal!
+
+TIP: Delete everything below the first line when you're ready to customize.
+=============================================================================

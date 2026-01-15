@@ -1,147 +1,323 @@
-# Copyright (c) Microsoft. All rights reserved.
-# Licensed under the MIT license.
-# See LICENSE file in the project root for full license information.
-import contextlib
-import logging
-import os
-from typing import Union
-from urllib.parse import urlparse
+"""
+=============================================================================
+FOUNDRY AGENT ACCELERATOR - Main Application Module
+=============================================================================
 
+This is the main entry point for the Foundry Agent Accelerator application.
+It sets up the FastAPI web server and creates/updates a persistent AI Agent
+in Azure AI Foundry.
+
+WHAT THIS FILE DOES:
+--------------------
+1. Creates the web application (FastAPI)
+2. Connects to Azure AI Foundry
+3. Creates or updates a persistent AI Agent (with version history)
+4. Sets up authentication credentials for Azure
+
+KEY CONCEPTS FOR BEGINNERS:
+---------------------------
+- FastAPI: A Python web framework that handles HTTP requests
+- Azure AI Foundry: Microsoft's AI platform for building AI agents
+- Persistent Agent: An AI agent stored in Foundry (visible in portal, has versions)
+- Agent Version: Each time you update the agent, a new version is created
+
+HOW AGENT VERSIONING WORKS:
+---------------------------
+1. You edit prompts/system.txt (your source of truth)
+2. You deploy/restart the app
+3. The app calls create_version() with your new instructions
+4. Foundry creates a new version of your agent
+5. Both Git and Foundry have version history!
+
+ENVIRONMENT VARIABLES REQUIRED:
+-------------------------------
+- AZURE_EXISTING_AIPROJECT_ENDPOINT: Your Azure AI Foundry project URL
+- AZURE_AI_CHAT_DEPLOYMENT_NAME: The name of your deployed chat model
+- AZURE_AI_AGENT_NAME: The name for your persistent agent in Foundry
+
+=============================================================================
+"""
+
+# =============================================================================
+# IMPORTS - Libraries this file needs to work
+# =============================================================================
+
+# Python standard library imports
+import contextlib  # Helps manage resources that need cleanup
+import logging     # For printing helpful messages to the console
+import os          # For reading environment variables (configuration)
+from typing import Union  # For type hints
+from pathlib import Path  # For handling file paths
+
+# FastAPI - The web framework that handles HTTP requests
 import fastapi
-from azure.ai.projects.aio import AIProjectClient
-from azure.ai.inference.aio import ChatCompletionsClient, EmbeddingsClient
-from azure.identity import AzureDeveloperCliCredential, ManagedIdentityCredential
+from fastapi.staticfiles import StaticFiles  # Serves static files (CSS, images, etc.)
+
+# Azure AI SDK imports
+from azure.ai.projects import AIProjectClient  # Connects to Azure AI Foundry
+from azure.ai.projects.models import PromptAgentDefinition  # For defining agents
+
+# Azure authentication - How we prove our identity to Azure
+from azure.identity import DefaultAzureCredential, AzureCliCredential, ManagedIdentityCredential
+
+# dotenv - Loads configuration from .env file during local development
 from dotenv import load_dotenv
-from fastapi.staticfiles import StaticFiles
 
-from .search_index_manager import SearchIndexManager
-from .util import get_logger
+# Local imports - Other files in this project
+from .util import get_logger  # Helper for logging messages
 
-logger = None
-enable_trace = False
+# =============================================================================
+# GLOBAL VARIABLES
+# =============================================================================
+
+# Logger instance - will be initialized in create_app()
+logger: logging.Logger
+
+
+# =============================================================================
+# SYSTEM PROMPT LOADING
+# =============================================================================
+
+def load_system_prompt() -> str:
+    """
+    Load the system prompt from the prompts/system.txt file.
+    
+    The system prompt defines your agent's personality and behavior.
+    By keeping this in a separate file, you can customize the agent
+    without modifying Python code.
+    
+    Returns:
+        str: The contents of prompts/system.txt, or a default prompt
+    """
+    prompts_dir = Path(__file__).parent / "prompts"
+    system_prompt_path = prompts_dir / "system.txt"
+    
+    try:
+        with open(system_prompt_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        # Extract just the prompt part (before any instruction section)
+        if '=====' in content:
+            prompt = content.split('=====')[0].strip()
+        else:
+            prompt = content.strip()
+            
+        return prompt if prompt else "You are a helpful assistant."
+            
+    except FileNotFoundError:
+        logger.warning(f"System prompt file not found at {system_prompt_path}")
+        return "You are a helpful assistant."
+    except Exception as e:
+        logger.error(f"Error reading system prompt: {e}")
+        return "You are a helpful assistant."
+
+
+# =============================================================================
+# APPLICATION LIFESPAN
+# =============================================================================
 
 @contextlib.asynccontextmanager
 async def lifespan(app: fastapi.FastAPI):
-    azure_credential: Union[AzureDeveloperCliCredential, ManagedIdentityCredential]
+    """
+    Application lifespan manager - runs on startup and shutdown.
+    
+    STARTUP (before yield):
+    - Sets up Azure credentials
+    - Connects to Azure AI Foundry
+    - Creates or updates the persistent AI Agent
+    
+    SHUTDOWN (after yield):
+    - Closes all connections cleanly
+    """
+    
+    # -------------------------------------------------------------------------
+    # STEP 1: SET UP AZURE CREDENTIALS
+    # -------------------------------------------------------------------------
+    
+    logger.info("=" * 60)
+    logger.info("STARTING FOUNDRY AGENT ACCELERATOR")
+    logger.info("=" * 60)
+    
+    azure_credential: Union[AzureCliCredential, ManagedIdentityCredential]
+    
     if not os.getenv("RUNNING_IN_PRODUCTION"):
+        # LOCAL DEVELOPMENT MODE
+        logger.info("Running in LOCAL DEVELOPMENT mode")
+        
         if tenant_id := os.getenv("AZURE_TENANT_ID"):
-            logger.info("Using AzureDeveloperCliCredential with tenant_id %s", tenant_id)
-            azure_credential = AzureDeveloperCliCredential(tenant_id=tenant_id)
+            logger.info(f"Using AzureCliCredential with tenant_id: {tenant_id}")
+            azure_credential = AzureCliCredential(tenant_id=tenant_id)
         else:
-            logger.info("Using AzureDeveloperCliCredential")
-            azure_credential = AzureDeveloperCliCredential()
+            logger.info("Using AzureCliCredential (default tenant)")
+            azure_credential = AzureCliCredential()
     else:
-        # User-assigned identity was created and set in api.bicep
+        # PRODUCTION MODE (running in Azure)
+        logger.info("Running in PRODUCTION mode (Azure)")
         user_identity_client_id = os.getenv("AZURE_CLIENT_ID")
-        logger.info("Using ManagedIdentityCredential with client_id %s", user_identity_client_id)
+        logger.info(f"Using ManagedIdentityCredential with client_id: {user_identity_client_id}")
         azure_credential = ManagedIdentityCredential(client_id=user_identity_client_id)
-
+    
+    # -------------------------------------------------------------------------
+    # STEP 2: CONNECT TO AZURE AI FOUNDRY PROJECT
+    # -------------------------------------------------------------------------
+    
     endpoint = os.environ["AZURE_EXISTING_AIPROJECT_ENDPOINT"]
-    project = AIProjectClient(
+    logger.info(f"Connecting to Azure AI Foundry project: {endpoint}")
+    
+    # Create the project client - this is our main connection to Foundry
+    project_client = AIProjectClient(
         credential=azure_credential,
         endpoint=endpoint,
     )
-
-    if enable_trace:
-        application_insights_connection_string = ""
-        try:
-            application_insights_connection_string = await project.telemetry.get_application_insights_connection_string()
-        except Exception as e:
-            e_string = str(e)
-            logger.error("Failed to get Application Insights connection string, error: %s", e_string)
-        if not application_insights_connection_string:
-            logger.error("Application Insights was not enabled for this project.")
-            logger.error("Enable it via the 'Tracing' tab in your AI Foundry project page.")
-            exit()
-        else:
-            from azure.monitor.opentelemetry import configure_azure_monitor
-            configure_azure_monitor(connection_string=application_insights_connection_string)
-
-
-    # Project endpoint has the form:   https://your-ai-services-account-name.services.ai.azure.com/api/projects/your-project-name
-    # Inference endpoint has the form: https://your-ai-services-account-name.services.ai.azure.com/models
-    # Strip the "/api/projects/your-project-name" part and replace with "/models":
-    inference_endpoint = f"https://{urlparse(endpoint).netloc}/models"
-
-    chat =  ChatCompletionsClient(
-        endpoint=inference_endpoint,
-        credential=azure_credential,
-        credential_scopes=["https://ai.azure.com/.default"],
+    
+    # -------------------------------------------------------------------------
+    # STEP 3: CREATE OR UPDATE THE PERSISTENT AGENT
+    # -------------------------------------------------------------------------
+    # This is the key step! We create a version of the agent in Foundry.
+    # If the agent already exists, this creates a NEW VERSION.
+    # This means you get version history both in Git AND in Foundry!
+    # -------------------------------------------------------------------------
+    
+    agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "foundry-accelerator-agent")
+    model_name = os.environ["AZURE_AI_CHAT_DEPLOYMENT_NAME"]
+    
+    # Load the system prompt from prompts/system.txt
+    system_prompt = load_system_prompt()
+    
+    logger.info("-" * 40)
+    logger.info("CREATING/UPDATING AGENT IN FOUNDRY")
+    logger.info(f"  Agent Name: {agent_name}")
+    logger.info(f"  Model: {model_name}")
+    logger.info(f"  Instructions: {system_prompt[:100]}...")
+    logger.info("-" * 40)
+    
+    # Create a new version of the agent
+    # If this is the first time, it creates the agent
+    # If the agent exists, it creates a new version with updated instructions
+    agent = project_client.agents.create_version(
+        agent_name=agent_name,
+        definition=PromptAgentDefinition(
+            model=model_name,
+            instructions=system_prompt,
+        ),
+        description="Agent created/updated by Foundry Agent Accelerator",
     )
-    embed =  EmbeddingsClient(
-        endpoint=inference_endpoint,
-        credential=azure_credential,
-        credential_scopes=["https://ai.azure.com/.default"],
-    )
-
-    endpoint = os.environ.get('AZURE_AI_SEARCH_ENDPOINT')
-    search_index_manager = None
-    embed_dimensions = None
-    if os.getenv('AZURE_AI_EMBED_DIMENSIONS'):
-        embed_dimensions = int(os.getenv('AZURE_AI_EMBED_DIMENSIONS'))
-        
-    if endpoint and os.getenv('AZURE_AI_SEARCH_INDEX_NAME') and os.getenv('AZURE_AI_EMBED_DEPLOYMENT_NAME'):
-        search_index_manager = SearchIndexManager(
-            endpoint = endpoint,
-            credential = azure_credential,
-            index_name = os.getenv('AZURE_AI_SEARCH_INDEX_NAME'),
-            dimensions = embed_dimensions,
-            model = os.getenv('AZURE_AI_EMBED_DEPLOYMENT_NAME'),
-            embeddings_client=embed
-        )
-        # Create index and upload the documents only if index does not exist.
-        logger.info(f"Creating index {os.getenv('AZURE_AI_SEARCH_INDEX_NAME')}.")
-        await search_index_manager.ensure_index_created(
-            vector_index_dimensions=embed_dimensions if embed_dimensions else 100)
-    else:
-        logger.info("The RAG search will not be used.")
-
-    app.state.chat = chat
-    app.state.search_index_manager = search_index_manager
-    app.state.chat_model = os.environ["AZURE_AI_CHAT_DEPLOYMENT_NAME"]
+    
+    logger.info(f"✅ Agent ready!")
+    logger.info(f"   ID: {agent.id}")
+    logger.info(f"   Name: {agent.name}")
+    logger.info(f"   Version: {agent.version}")
+    
+    # -------------------------------------------------------------------------
+    # STEP 4: GET THE OPENAI CLIENT FOR CHAT
+    # -------------------------------------------------------------------------
+    # The OpenAI client is used to interact with the agent via the
+    # responses API, which supports streaming.
+    # -------------------------------------------------------------------------
+    
+    openai_client = project_client.get_openai_client()
+    
+    # -------------------------------------------------------------------------
+    # STEP 5: STORE CLIENTS IN APP STATE
+    # -------------------------------------------------------------------------
+    
+    app.state.project_client = project_client
+    app.state.openai_client = openai_client
+    app.state.agent = agent
+    app.state.agent_name = agent_name
+    
+    logger.info("=" * 60)
+    logger.info(f"AGENT READY - {agent.name} (v{agent.version})")
+    logger.info("Agent is visible in Azure AI Foundry portal!")
+    logger.info("=" * 60)
+    
+    # -------------------------------------------------------------------------
+    # YIELD - Application runs here
+    # -------------------------------------------------------------------------
+    
     yield
+    
+    # -------------------------------------------------------------------------
+    # SHUTDOWN: CLEAN UP RESOURCES
+    # -------------------------------------------------------------------------
+    
+    logger.info("Shutting down Foundry Agent Accelerator...")
+    
+    # Note: We do NOT delete the agent on shutdown
+    # The agent persists in Foundry and can be viewed in the portal
+    
+    project_client.close()
+    
+    logger.info("Shutdown complete. Agent remains in Foundry!")
 
-    await project.close()
-    await chat.close()
-    if search_index_manager is not None:
-        await search_index_manager.close()
 
+# =============================================================================
+# APPLICATION FACTORY
+# =============================================================================
 
 def create_app():
+    """
+    Create and configure the FastAPI application.
+    
+    Returns:
+        fastapi.FastAPI: The configured application instance
+    """
+    
+    # -------------------------------------------------------------------------
+    # LOAD ENVIRONMENT VARIABLES
+    # -------------------------------------------------------------------------
+    
     if not os.getenv("RUNNING_IN_PRODUCTION"):
         load_dotenv(override=True)
-
+    
+    # -------------------------------------------------------------------------
+    # SET UP LOGGING
+    # -------------------------------------------------------------------------
+    
     global logger
     logger = get_logger(
-        name="azureaiapp",
+        name="foundry-agent",
         log_level=logging.INFO,
-        log_file_name = os.getenv("APP_LOG_FILE"),
+        log_file_name=os.getenv("APP_LOG_FILE"),
         log_to_console=True
     )
-
-    enable_trace_string = os.getenv("ENABLE_AZURE_MONITOR_TRACING", "")
-    global enable_trace
-    enable_trace = False
-    if enable_trace_string == "":
-        enable_trace = False
-    else:
-        enable_trace = str(enable_trace_string).lower() == "true"
-    if enable_trace:
-        logger.info("Tracing is enabled.")
-        try:
-            from azure.monitor.opentelemetry import configure_azure_monitor
-        except ModuleNotFoundError:
-            logger.error("Required libraries for tracing not installed.")
-            logger.error("Please make sure azure-monitor-opentelemetry is installed.")
-            exit()
-    else:
-        logger.info("Tracing is not enabled")
-
-    app = fastapi.FastAPI(lifespan=lifespan)
+    
+    logger.info("Initializing Foundry Agent Accelerator...")
+    
+    # -------------------------------------------------------------------------
+    # CREATE THE FASTAPI APPLICATION
+    # -------------------------------------------------------------------------
+    
+    app = fastapi.FastAPI(
+        lifespan=lifespan,
+        title="Foundry Agent Accelerator",
+        description="A starting point for building AI agents with Azure AI Foundry",
+        version="2.0.0"  # Updated version for agent-based architecture
+    )
+    
+    # -------------------------------------------------------------------------
+    # MOUNT STATIC FILES
+    # -------------------------------------------------------------------------
+    
     app.mount("/static", StaticFiles(directory="api/static"), name="static")
-
-    from . import routes  # noqa
-
+    
+    # -------------------------------------------------------------------------
+    # INCLUDE API ROUTES
+    # -------------------------------------------------------------------------
+    
+    from . import routes
     app.include_router(routes.router)
-
+    
+    logger.info("Application created successfully")
+    
     return app
+
+
+# =============================================================================
+# MODULE-LEVEL APP INSTANCE
+# =============================================================================
+# This creates the app when the module is imported, which is required
+# for uvicorn to find it via "api.main:app"
+# =============================================================================
+
+app = create_app()

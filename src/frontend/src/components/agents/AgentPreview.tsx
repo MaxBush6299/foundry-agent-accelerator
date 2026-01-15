@@ -1,3 +1,37 @@
+/**
+ * =============================================================================
+ * FOUNDRY AGENT ACCELERATOR - Agent Preview Component
+ * =============================================================================
+ * 
+ * This is the main chat interface component. It handles:
+ * - Displaying the chat conversation (user messages + AI responses)
+ * - Sending messages to the backend API
+ * - Receiving and processing streaming responses from the AI
+ * - Managing chat state (message history, loading states)
+ * 
+ * HOW THE CHAT FLOW WORKS:
+ * ------------------------
+ * 1. User types a message and clicks send (or presses Enter)
+ * 2. The message is added to the chat display
+ * 3. A POST request is sent to /chat endpoint with the conversation history
+ * 4. The backend sends the response as a stream (word by word)
+ * 5. We process each chunk and update the UI in real-time
+ * 6. When streaming completes, we show the final response
+ * 
+ * SSE (Server-Sent Events):
+ * -------------------------
+ * The backend uses SSE to stream responses. This means instead of waiting
+ * for the complete response, we receive it piece by piece. This provides
+ * a better user experience as they see the response being "typed out".
+ * 
+ * Message Types from Server:
+ * - { type: "message", content: "..." } - A chunk of the response
+ * - { type: "completed_message", content: "..." } - The full response
+ * - { type: "stream_end" } - Stream finished, stop processing
+ * 
+ * =============================================================================
+ */
+
 import { ReactNode, useState, useMemo } from "react";
 import {
   Body1,
@@ -11,10 +45,14 @@ import { AgentIcon } from "./AgentIcon";
 import { SettingsPanel } from "../core/SettingsPanel";
 import { AgentPreviewChatBot } from "./AgentPreviewChatBot";
 import { MenuButton } from "../core/MenuButton/MenuButton";
-import { IChatItem } from "./chatbot/types";
+import { IChatItem, IFileAttachment } from "./chatbot/types";
 
 import styles from "./AgentPreview.module.css";
 
+/**
+ * Agent Interface
+ * Defines the structure of agent configuration data
+ */
 interface IAgent {
   id: string;
   object: string;
@@ -36,29 +74,66 @@ interface IAgent {
   response_format?: "auto" | string;
 }
 
+/**
+ * Agent Preview Props Interface
+ */
 interface IAgentPreviewProps {
   resourceId: string;
   agentDetails: IAgent;
 }
 
 
+/**
+ * Agent Preview Component
+ * 
+ * The main chat interface component that manages the conversation with the AI agent.
+ * Handles sending messages, receiving streaming responses, and displaying the chat.
+ * 
+ * @param {IAgentPreviewProps} props - Component properties
+ * @param {string} props.resourceId - Identifier for the chat resource
+ * @param {IAgent} props.agentDetails - Agent configuration (name, description, logo)
+ * 
+ * @returns {ReactNode} The complete chat interface
+ */
 export function AgentPreview({ agentDetails }: IAgentPreviewProps): ReactNode {
+  // -------------------------------------------------------------------------
+  // STATE MANAGEMENT
+  // -------------------------------------------------------------------------
+  
+  /** Controls whether the settings panel is visible */
   const [isSettingsPanelOpen, setIsSettingsPanelOpen] = useState(false);
+  
+  /** Array of all messages in the conversation */
   const [messageList, setMessageList] = useState<IChatItem[]>([]);
+  
+  /** True when waiting for/receiving AI response */
   const [isResponding, setIsResponding] = useState(false);
 
+  // -------------------------------------------------------------------------
+  // EVENT HANDLERS
+  // -------------------------------------------------------------------------
 
-
-
+  /**
+   * Handle settings panel visibility changes
+   * @param {boolean} isOpen - Whether the panel should be open
+   */
   const handleSettingsPanelOpenChange = (isOpen: boolean) => {
     setIsSettingsPanelOpen(isOpen);
   };
 
+  /**
+   * Start a new chat conversation
+   * Clears all messages and resets the session
+   */
   const newThread = () => {
     setMessageList([]);
     deleteAllCookies();
   };
 
+  /**
+   * Delete all browser cookies for the current session
+   * Used when starting a new chat to ensure clean state
+   */
   const deleteAllCookies = (): void => {
     document.cookie.split(";").forEach((cookieStr: string) => {
       const trimmedCookieStr = cookieStr.trim();
@@ -69,20 +144,45 @@ export function AgentPreview({ agentDetails }: IAgentPreviewProps): ReactNode {
     });
   };
 
-  const onSend = async (message: string) => {
+  // -------------------------------------------------------------------------
+  // CHAT MESSAGE HANDLING
+  // -------------------------------------------------------------------------
+
+  /**
+   * Send a message to the AI agent
+   * 
+   * This is the main function that handles sending user messages to the backend.
+   * It creates a user message, adds it to the chat, sends it to the /chat endpoint,
+   * and sets up streaming to receive the AI's response.
+   * 
+   * @param {string} message - The user's message text
+   * @param {IFileAttachment[]} attachments - Optional file attachments (images, documents)
+   */
+  const onSend = async (message: string, attachments?: IFileAttachment[]) => {
+    // Step 1: Create the user message object
     const userMessage: IChatItem = {
       id: `user-${Date.now()}`,
       content: message,
       role: "user",
+      attachments: attachments,
       more: { time: new Date().toISOString() },
     };
 
+    // Step 2: Add user message to the chat display
     setMessageList((prev) => [...prev, userMessage]);
 
     try {
+      // Step 3: Prepare the request payload
+      // Include all messages (history + new message) for context
+      // Convert attachments to the format expected by the backend
       const messages = [...messageList, userMessage].map((item) => ({
         role: item.role,
         content: item.content,
+        attachments: item.attachments?.map((att) => ({
+          name: att.name,
+          type: att.type,
+          data: att.data,
+        })) || [],
       }));
       const postData = {messages};
       // IMPORTANT: Add credentials: 'include' if server cookies are critical

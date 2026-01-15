@@ -1,15 +1,39 @@
 # Local Development Guide
 
-This guide helps you set up a local development environment to test and modify the AI chat completion application. Make sure you first [deployed the app](#deploying-with-azd) to Azure before running the development server.
+This guide helps you set up a local development environment to test and modify the Foundry Agent Accelerator.
 
 ## Prerequisites
 
 - Python 3.8 or later
 - [Node.js](https://nodejs.org/) (v20 or later)
 - [pnpm](https://pnpm.io/installation)
-- An Azure deployment of the application (completed via `azd up`)
+- An Azure AI Foundry project with a deployed chat model
+- Azure CLI logged in (`az login` or `azd auth login`)
 
-## Environment Setup
+## Quick Start
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/MaxBush6299/foundry-agent-accelerator.git
+cd foundry-agent-accelerator
+
+# 2. Create and configure environment
+cp .env.template src/.env
+# Edit src/.env with your Azure details
+
+# 3. Install dependencies
+cd src
+pip install -r requirements.txt
+
+# 4. Run the server
+python -m uvicorn api.main:app --reload
+```
+
+Open http://127.0.0.1:8000 in your browser.
+
+---
+
+## Detailed Setup
 
 ### 1. Python Environment
 
@@ -21,7 +45,7 @@ python -m venv .venv
 .venv\scripts\activate
 ```
 
-**On Linux:**
+**On Linux/Mac:**
 ```shell
 python3 -m venv .venv
 source .venv/bin/activate
@@ -36,118 +60,196 @@ cd src
 python -m pip install -r requirements.txt
 ```
 
-### 3. Frontend Setup
+**Note:** The `azure-ai-projects` package requires pre-release version `>=2.0.0b1` for agent support.
 
-Navigate to the frontend directory and setup for React UI:
+### 3. Environment Configuration
+
+Copy the template and fill in your values:
+
+```shell
+cp .env.template src/.env
+```
+
+Edit `src/.env`:
+
+```bash
+# Required - Your Foundry project endpoint
+AZURE_EXISTING_AIPROJECT_ENDPOINT=https://your-account.services.ai.azure.com/api/projects/your-project
+
+# Required - Your deployed model name
+AZURE_AI_CHAT_DEPLOYMENT_NAME=gpt-4o-mini
+
+# Required - Name for your agent in Foundry
+AZURE_AI_AGENT_NAME=my-dev-agent
+
+# Optional - If you have multiple Azure tenants
+# AZURE_TENANT_ID=your-tenant-id
+```
+
+### 4. Frontend Setup (Optional)
+
+If you want to modify the React frontend:
 
 ```shell
 cd src/frontend
+pnpm install
 pnpm run setup
 ```
 
-### 4. Environment Configuration
-
-Fill in the environment variables in `.env` file in the `src` directory.
+---
 
 ## Running the Development Server
 
-### 1. Build Frontend (Optional)
+### Start the Server
 
-If you have changes in `src/frontend`, build the React application:
+```shell
+cd src
+python -m uvicorn api.main:app --reload
+```
+
+### What Happens on Startup
+
+When you start the server, you'll see:
+
+```
+============================================================
+STARTING FOUNDRY AGENT ACCELERATOR
+============================================================
+Running in LOCAL DEVELOPMENT mode
+Using AzureDeveloperCliCredential (default tenant)
+Connecting to Azure AI Foundry project: https://...
+----------------------------------------
+CREATING/UPDATING AGENT IN FOUNDRY
+  Agent Name: my-dev-agent
+  Model: gpt-4o-mini
+  Instructions: You are a helpful assistant...
+----------------------------------------
+✅ Agent ready!
+   ID: asst_abc123xyz
+   Name: my-dev-agent
+   Version: 1
+============================================================
+AGENT READY - my-dev-agent (v1)
+Agent is visible in Azure AI Foundry portal!
+============================================================
+```
+
+### Access the Application
+
+Open http://127.0.0.1:8000 in your browser.
+
+---
+
+## Development Workflow
+
+### Updating Your Agent
+
+1. Edit `src/api/prompts/system.txt` with your new instructions
+2. Save the file
+3. The server will auto-reload (if using `--reload`)
+4. A **new version** of your agent is created in Foundry!
+
+### Viewing Agent Versions
+
+1. Go to [Azure AI Foundry](https://ai.azure.com)
+2. Open your project
+3. Click "Agents" in the sidebar
+4. Click on your agent to see version history
+
+### Testing Changes
+
+1. Make changes to `system.txt`
+2. Server reloads automatically
+3. New agent version created
+4. Test in the chat interface
+5. Check Foundry portal to see the new version
+
+---
+
+## Frontend Development
+
+### Build the Frontend
+
+If you've modified files in `src/frontend`:
 
 ```shell
 cd src/frontend
 pnpm build
 ```
 
-The build output will be placed in the `../api/static/react` directory, where the backend can serve it.
+The build output goes to `../api/static/react`.
 
-### 2. Test Search Index Configuration (Optional)
+### Key Files for Customization
 
-If you have changes in `gunicorn.conf.py`, test the search index configuration:
+| File | What to Customize |
+|------|-------------------|
+| `src/frontend/src/components/App.tsx` | Agent name, description, logo |
+| `src/frontend/src/components/agents/AgentPreview.tsx` | Chat behavior and API calls |
+| `src/frontend/src/components/agents/chatbot/ChatInput.tsx` | Input field styling |
 
-```shell
-cd src
-python gunicorn.conf.py    
+---
+
+## Troubleshooting
+
+### "DefaultAzureCredential failed"
+
+You need to authenticate with Azure:
+
+```bash
+az login
+# or
+azd auth login
 ```
 
-### 3. Start the Server
+### "Agent creation failed"
 
-Run the local development server:
+Check that:
+1. `AZURE_EXISTING_AIPROJECT_ENDPOINT` is correct
+2. `AZURE_AI_CHAT_DEPLOYMENT_NAME` matches a deployed model in your project
+3. You have permissions to create agents in the project
 
-```shell
-cd src
-python -m uvicorn "api.main:create_app" --factory --reload
+### "Module not found" errors
+
+Make sure you installed the correct package versions:
+
+```bash
+pip install --pre azure-ai-projects>=2.0.0b1
 ```
 
-### 4. Access the Application
+### Agent not appearing in portal
 
-Click '<http://127.0.0.1:8000>' in the terminal, which should open a new tab in the browser. Enter your message in the box to test the chat completion.
+1. Check the startup logs for errors
+2. Verify `AZURE_EXISTING_AIPROJECT_ENDPOINT` points to the right project
+3. Make sure the agent name doesn't have invalid characters
 
-## Frontend Development and Customization
+---
 
-If you want to modify the frontend application, the key component to understand is `src/frontend/src/components/agents/AgentPreview.tsx`. This component handles:
+## Tips for Development
 
-- **Backend Communication**: Contains the main logic for calling the backend API endpoints
-- **Message Handling**: Manages the flow of user messages and chat responses
-- **UI State Management**: Controls the display of conversation history and loading states
+### Use a Separate Agent Name
 
-### Key Areas for Customization
+During development, use a different agent name to avoid affecting your production agent:
 
-- **Chat Interaction Flow**: Modify how users interact with the chat by updating the message handling logic in `AgentPreview.tsx`
-- **UI Components**: Customize the chat interface, message bubbles, and response formatting
-- **API Integration**: Extend or modify the backend communication patterns established in this component
+```bash
+AZURE_AI_AGENT_NAME=my-dev-agent  # Development
+AZURE_AI_AGENT_NAME=my-prod-agent # Production
+```
 
-### Development Workflow
+### Check Logs
 
-1. Make changes to React components in `src/frontend/src/`
-2. Run `pnpm build` to compile the frontend
-3. The build output is automatically placed in `../api/static/react` for the backend to serve
-4. Restart the local server to see your changes
+The app logs helpful information:
+- Connection status
+- Agent creation/version details
+- Chat request processing
+- Errors and warnings
 
-Start with `AgentPreview.tsx` to understand how the frontend communicates with the backend and how messages are populated in the UI.
+### Test with Simple Prompts
 
-## Search Index and RAG Customization
+Start with a simple `system.txt`:
 
-This application uses Azure AI Search to provide Retrieval-Augmented Generation (RAG) capabilities. The system prompts the chat completion model with relevant context retrieved from a search index.
+```
+You are a helpful assistant.
+```
 
-### How RAG Works in This Application
-
-1. **Pre-computed Embeddings**: The application uses pre-computed embeddings stored in `src/api/data/embeddings.csv`
-2. **Search Index Creation**: On startup, `gunicorn.conf.py` creates an Azure AI Search index and uploads the embeddings
-3. **Query-time Search**: When users ask questions, the system searches for relevant context and includes it in the prompt
-4. **Chat Completion**: The chat completion model responds using both the user's message and the retrieved context
-
-### Updating the Knowledge Base
-
-To update the knowledge base that the RAG system uses:
-
-#### Modifying the Embeddings Data
-
-1. **Update the CSV**: Modify `src/api/data/embeddings.csv` with your new data
-2. **CSV Format**: The file should contain pre-computed embeddings and associated text content
-3. **Restart or Redeploy**: The search index is only created once at startup, so you need to:
-   - Delete the existing search index in Azure AI Search, then restart the application, OR
-   - Run `azd deploy` again to recreate the infrastructure
-
-#### Important Notes About Data Updates
-
-- **One-time Upload**: The embeddings are only uploaded when the search index is first created
-- **Manual Index Management**: If you need to update data, you must manually delete the existing index or redeploy
-- **No File Directory**: This application does not use individual files from a `src/files/` directory
-- **CSV Only**: The RAG system exclusively uses the `embeddings.csv` file for its knowledge base
-
-### Customizing the RAG Behavior
-
-#### Search Configuration
-- Modify the search logic in `SearchIndexManager` class (`src/api/search_index_manager.py`)
-- Adjust search parameters, scoring, and result filtering
-
-#### Prompt Engineering
-- Update the RAG prompt template in `src/api/routes.py` (around line 115)
-- Customize how retrieved context is formatted and presented to the model
-
-#### Model Configuration
-- Change the chat completion model via the `AZURE_AI_CHAT_DEPLOYMENT_NAME` environment variable
-- Adjust embedding model via the `AZURE_AI_EMBED_DEPLOYMENT_NAME` environment variable
+Then gradually add complexity once you confirm the basics work.
 

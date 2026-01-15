@@ -1,9 +1,75 @@
-from typing import Optional
+"""
+=============================================================================
+FOUNDRY AGENT ACCELERATOR - Search Index Manager (RAG Support)
+=============================================================================
 
+██████╗  █████╗  ██████╗     ███████╗███████╗ █████╗ ████████╗██╗   ██╗██████╗ ███████╗
+██╔══██╗██╔══██╗██╔════╝     ██╔════╝██╔════╝██╔══██╗╚══██╔══╝██║   ██║██╔══██╗██╔════╝
+██████╔╝███████║██║  ███╗    █████╗  █████╗  ███████║   ██║   ██║   ██║██████╔╝█████╗  
+██╔══██╗██╔══██║██║   ██║    ██╔══╝  ██╔══╝  ██╔══██║   ██║   ██║   ██║██╔══██╗██╔══╝  
+██║  ██║██║  ██║╚██████╔╝    ██║     ███████╗██║  ██║   ██║   ╚██████╔╝██║  ██║███████╗
+╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝     ╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚══════╝
+
+*** THIS IS AN OPTIONAL FEATURE - YOUR AGENT WORKS WITHOUT IT ***
+
+=============================================================================
+WHAT IS RAG?
+=============================================================================
+
+RAG stands for "Retrieval Augmented Generation". It's a technique that lets
+your AI agent search through your own documents to find relevant information
+before answering questions.
+
+WITHOUT RAG: The agent only knows what the AI model was trained on.
+WITH RAG:    The agent can search your documents and use that information
+             to give better, more specific answers.
+
+Example: If you have product documentation, RAG lets users ask questions
+         and get answers based on YOUR documentation, not just general AI knowledge.
+
+=============================================================================
+DO I NEED THIS?
+=============================================================================
+
+You might want RAG if:
+✅ You have documents (PDFs, Word docs, markdown files) you want the agent to reference
+✅ Users will ask questions about YOUR specific content
+✅ You need accurate answers based on your organization's information
+
+You probably DON'T need RAG if:
+❌ You just want a general-purpose chatbot
+❌ You don't have specific documents to search
+❌ You're still learning and want to keep things simple
+
+=============================================================================
+HOW TO ENABLE RAG
+=============================================================================
+
+1. Create an Azure AI Search resource in the Azure portal
+2. Set these environment variables in your .env file:
+   - AZURE_AI_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
+   - AZURE_AI_SEARCH_INDEX_NAME=your-index-name
+   - AZURE_AI_EMBED_DEPLOYMENT_NAME=text-embedding-ada-002 (or your model)
+   - AZURE_AI_EMBED_DIMENSIONS=1536 (depends on your embedding model)
+
+3. Place your documents in a folder and use build_embeddings_file() to process them
+4. The agent will automatically search your documents when answering questions
+
+For detailed setup instructions, see: docs/RAG.md
+
+=============================================================================
+"""
+
+# =============================================================================
+# IMPORTS
+# =============================================================================
+
+from typing import Optional
 import glob
 import csv
 import json
 
+# Azure SDK imports
 from azure.core.credentials_async import AsyncTokenCredential
 from azure.search.documents.aio import SearchClient
 from azure.search.documents.indexes.aio import SearchIndexClient
@@ -15,11 +81,18 @@ from azure.search.documents.indexes.models import (
     SearchIndex,
     VectorSearch,
     VectorSearchProfile,
-    HnswAlgorithmConfiguration)
+    HnswAlgorithmConfiguration
+)
 from azure.ai.inference.aio import EmbeddingsClient
 from azure.core.exceptions import ResourceNotFoundError, HttpResponseError
+
+# Local imports
 from .util import ChatRequest
 
+
+# =============================================================================
+# SEARCH INDEX MANAGER CLASS
+# =============================================================================
 
 class SearchIndexManager:
     """
