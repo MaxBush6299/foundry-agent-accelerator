@@ -46,7 +46,7 @@ Unlike simple chat apps, this accelerator creates a **real agent** in Azure AI F
 ### Prerequisites
 
 - Azure subscription with Azure AI Foundry access
-- A deployed chat model (like gpt-4o) in your Foundry project
+- A deployed chat model (like gpt-5.2) in your Foundry project
 - Azure CLI or Azure Developer CLI installed
 
 ### Option 1: Deploy to Azure (Recommended)
@@ -297,7 +297,6 @@ azd down
 | Azure AI Services | AI model access | Per-token pricing |
 | Container Registry | Stores app image | ~$5/month |
 
-**Tip:** Use `gpt-4o-mini` for lower costs during development.
 
 ---
 
