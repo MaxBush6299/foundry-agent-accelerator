@@ -22,8 +22,11 @@ The key difference from a regular chat app: **The chef (agent) is a real person 
 │                    ON STARTUP                                │
 │                                                              │
 │  1. Read system.txt (the recipe book)                       │
-│  2. Register chef with Foundry (create_version)             │
-│  3. Chef now exists in Foundry with version history!        │
+│  2. Compute config hash (fingerprint of current settings)   │
+│  3. Compare to previous deployment hash                      │
+│  4. If changed → create_version (new version!)              │
+│     If same → reuse existing agent (no spam!)               │
+│  5. Chef ready to serve!                                     │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -64,22 +67,28 @@ say "I'll need to check on that for you."
 **What happens:**
 1. Loads settings from the `.env` file
 2. Logs into Azure using your credentials
-3. **Creates or updates the agent in Foundry** ← This is the key step!
-4. Gets ready to route messages to the agent
+3. **Computes a hash of the current config** (model + prompt + agent name)
+4. **Compares to the stored hash** from the last deployment
+5. If changed → Creates a new agent version in Foundry
+6. If unchanged → Reuses the existing agent (no version spam!)
+7. Gets ready to route messages to the agent
 
-**The important part:**
+**The smart version detection:**
 ```python
-# This creates a PERSISTENT agent in Foundry
-agent = project_client.agents.create_version(
-    agent_name="my-agent",
-    definition=PromptAgentDefinition(
-        model="gpt-4o-mini",
-        instructions=load_system_prompt(),  # From system.txt
-    ),
-)
+# Compute hash of current config
+current_hash = compute_config_hash(agent_name, model_name, system_prompt)
+stored_hash = get_stored_config_hash()
+
+if current_hash == stored_hash:
+    # Config unchanged - reuse existing agent
+    agent = project_client.agents.get(agent_name)
+else:
+    # Config changed - create new version
+    agent = project_client.agents.create_version(...)
+    store_config_hash(current_hash)
 ```
 
-Every time this runs, if you've changed `system.txt`, a new version is created!
+This means you can restart the app as many times as you want without creating duplicate versions!
 
 ---
 
@@ -165,9 +174,9 @@ Instead of waiting for the complete response:
 
 ---
 
-## The Version History Magic
+## The Smart Version History Magic
 
-Here's what makes this accelerator special:
+Here's what makes this accelerator special - it only creates new versions when you actually change something:
 
 ```
 You edit system.txt
@@ -175,6 +184,8 @@ You edit system.txt
 "You are a friendly support agent..."
         ↓
 Restart app / Redeploy
+        ↓
+Hash computed → Different from stored hash!
         ↓
 create_version() is called
         ↓
@@ -186,18 +197,21 @@ create_version() is called
 │  ├── Version 2                           │
 │  └── Version 1                           │
 └─────────────────────────────────────────┘
-        +
-┌─────────────────────────────────────────┐
-│         GIT HISTORY                      │
-│                                          │
-│  commit abc123 - "Updated agent prompt"  │
-│  commit def456 - "Initial agent setup"   │
-└─────────────────────────────────────────┘
+
+(Later, you restart without changing anything)
+        ↓
+Hash computed → Same as stored hash!
+        ↓
+Reuse existing agent (no new version)
+        ↓
+Version 3 still current ✓
 ```
 
 You get version history in TWO places:
 1. **Git** - Your code repository (system.txt changes)
 2. **Foundry** - The agent versions in the portal
+
+And you don't get version spam from restarts!
 
 ---
 
@@ -205,7 +219,7 @@ You get version history in TWO places:
 
 ### "I want to change what my agent says"
 
-Edit `src/api/prompts/system.txt` and restart. A new version is created!
+Edit `src/api/prompts/system.txt` and restart. A new version is created (and only when you change it - restarts without changes don't create new versions)!
 
 ### "I want to change the agent's name"
 

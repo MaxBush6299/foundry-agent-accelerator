@@ -25,9 +25,13 @@ HOW AGENT VERSIONING WORKS:
 ---------------------------
 1. You edit prompts/system.txt (your source of truth)
 2. You deploy/restart the app
-3. The app calls create_version() with your new instructions
-4. Foundry creates a new version of your agent
-5. Both Git and Foundry have version history!
+3. The app computes a hash of the config (model, instructions, tools)
+4. If the hash matches the previous deployment → reuse existing agent
+5. If the hash differs → create a new version in Foundry
+6. Both Git and Foundry have version history!
+
+This prevents creating a new version on every restart while still
+automatically deploying changes when you modify the configuration.
 
 ENVIRONMENT VARIABLES REQUIRED:
 -------------------------------
@@ -44,6 +48,8 @@ ENVIRONMENT VARIABLES REQUIRED:
 
 # Python standard library imports
 import contextlib  # Helps manage resources that need cleanup
+import hashlib     # For computing config hash to detect changes
+import json        # For serializing config to hash
 import logging     # For printing helpful messages to the console
 import os          # For reading environment variables (configuration)
 from typing import Union  # For type hints
@@ -113,6 +119,71 @@ def load_system_prompt() -> str:
 
 
 # =============================================================================
+# CONFIG HASH MANAGEMENT
+# =============================================================================
+# We use a hash of the agent configuration to detect changes.
+# This prevents creating a new version on every restart - we only
+# create a new version when the config actually changes.
+# =============================================================================
+
+# Path to store the last deployed config hash
+CONFIG_HASH_FILE = Path(__file__).parent / ".agent_config_hash"
+
+
+def compute_config_hash(agent_name: str, model_name: str, instructions: str) -> str:
+    """
+    Compute a SHA-256 hash of the agent configuration.
+    
+    This hash is used to detect if the configuration has changed since
+    the last deployment. If the hash matches, we skip creating a new version.
+    
+    Args:
+        agent_name: The name of the agent
+        model_name: The model deployment name
+        instructions: The system prompt/instructions
+        
+    Returns:
+        str: A hex-encoded SHA-256 hash of the configuration
+    """
+    config = {
+        "agent_name": agent_name,
+        "model_name": model_name,
+        "instructions": instructions,
+        # Future: add "tools" here when tool support is added
+    }
+    config_json = json.dumps(config, sort_keys=True)
+    return hashlib.sha256(config_json.encode()).hexdigest()
+
+
+def get_stored_config_hash() -> str | None:
+    """
+    Retrieve the previously stored config hash.
+    
+    Returns:
+        str | None: The stored hash, or None if no hash file exists
+    """
+    try:
+        if CONFIG_HASH_FILE.exists():
+            return CONFIG_HASH_FILE.read_text().strip()
+    except Exception:
+        pass
+    return None
+
+
+def store_config_hash(config_hash: str) -> None:
+    """
+    Store the config hash for future comparison.
+    
+    Args:
+        config_hash: The hash to store
+    """
+    try:
+        CONFIG_HASH_FILE.write_text(config_hash)
+    except Exception as e:
+        logger.warning(f"Could not store config hash: {e}")
+
+
+# =============================================================================
 # APPLICATION LIFESPAN
 # =============================================================================
 
@@ -171,11 +242,11 @@ async def lifespan(app: fastapi.FastAPI):
     )
     
     # -------------------------------------------------------------------------
-    # STEP 3: CREATE OR UPDATE THE PERSISTENT AGENT
+    # STEP 3: CREATE OR UPDATE THE PERSISTENT AGENT (WITH CHANGE DETECTION)
     # -------------------------------------------------------------------------
-    # This is the key step! We create a version of the agent in Foundry.
-    # If the agent already exists, this creates a NEW VERSION.
-    # This means you get version history both in Git AND in Foundry!
+    # We use a hash of the config to detect changes. This prevents creating
+    # a new version on every restart - we only create a new version when
+    # the configuration (model, instructions, tools) actually changes.
     # -------------------------------------------------------------------------
     
     agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "foundry-accelerator-agent")
@@ -184,29 +255,47 @@ async def lifespan(app: fastapi.FastAPI):
     # Load the system prompt from prompts/system.txt
     system_prompt = load_system_prompt()
     
+    # Compute hash of current config
+    current_hash = compute_config_hash(agent_name, model_name, system_prompt)
+    stored_hash = get_stored_config_hash()
+    
     logger.info("-" * 40)
-    logger.info("CREATING/UPDATING AGENT IN FOUNDRY")
+    logger.info("CHECKING AGENT CONFIGURATION")
     logger.info(f"  Agent Name: {agent_name}")
     logger.info(f"  Model: {model_name}")
     logger.info(f"  Instructions: {system_prompt[:100]}...")
+    logger.info(f"  Config Hash: {current_hash[:16]}...")
     logger.info("-" * 40)
     
-    # Create a new version of the agent
-    # If this is the first time, it creates the agent
-    # If the agent exists, it creates a new version with updated instructions
-    agent = project_client.agents.create_version(
-        agent_name=agent_name,
-        definition=PromptAgentDefinition(
-            model=model_name,
-            instructions=system_prompt,
-        ),
-        description="Agent created/updated by Foundry Agent Accelerator",
-    )
-    
-    logger.info(f"✅ Agent ready!")
-    logger.info(f"   ID: {agent.id}")
-    logger.info(f"   Name: {agent.name}")
-    logger.info(f"   Version: {agent.version}")
+    if current_hash == stored_hash:
+        # Config unchanged - retrieve existing agent
+        logger.info("✅ Config unchanged - using existing agent version")
+        agent = project_client.agents.get(agent_name)
+        agent_version = getattr(agent, 'version', 'latest')
+        logger.info(f"   Retrieved: {agent.name} (v{agent_version})")
+    else:
+        # Config changed - create new version
+        if stored_hash:
+            logger.info("📝 Config changed - creating new agent version")
+        else:
+            logger.info("📝 First deployment - creating agent")
+        
+        agent = project_client.agents.create_version(
+            agent_name=agent_name,
+            definition=PromptAgentDefinition(
+                model=model_name,
+                instructions=system_prompt,
+            ),
+            description="Agent created/updated by Foundry Agent Accelerator",
+        )
+        
+        # Store the new hash
+        store_config_hash(current_hash)
+        
+        logger.info(f"✅ New version created!")
+        logger.info(f"   ID: {agent.id}")
+        logger.info(f"   Name: {agent.name}")
+        logger.info(f"   Version: {agent.version}")
     
     # -------------------------------------------------------------------------
     # STEP 4: GET THE OPENAI CLIENT FOR CHAT
@@ -226,8 +315,9 @@ async def lifespan(app: fastapi.FastAPI):
     app.state.agent = agent
     app.state.agent_name = agent_name
     
+    agent_version = getattr(agent, 'version', 'latest')
     logger.info("=" * 60)
-    logger.info(f"AGENT READY - {agent.name} (v{agent.version})")
+    logger.info(f"AGENT READY - {agent.name} (v{agent_version})")
     logger.info("Agent is visible in Azure AI Foundry portal!")
     logger.info("=" * 60)
     

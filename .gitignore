@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Agent config hash (local deployment artifact)
+.agent_config_hash
+
 # C extensions
 *.so
 

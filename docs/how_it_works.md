@@ -146,19 +146,34 @@ Here's what the main files and folders do:
 
 ## How Versioning Works
 
-One powerful feature of this project is **version history**. Every time you change the system prompt and restart the application:
+One powerful feature of this project is **smart version history**. The application automatically detects when your agent configuration has changed:
 
-1. A new version of your agent is created in Azure
-2. The old versions are kept (you can see them in the Azure portal)
-3. Your code changes are tracked in Git (if you're using it)
+### Smart Change Detection
 
-This means you have a complete history of how your agent has evolved!
+When the application starts, it:
+
+1. Computes a "fingerprint" (hash) of your current configuration
+   - Agent name
+   - Model name  
+   - System prompt instructions
+2. Compares it to the fingerprint from the last deployment
+3. **If unchanged** → Uses the existing agent (no new version)
+4. **If changed** → Creates a new version in Azure
+
+This means:
+- ✅ Restarting the app doesn't spam new versions
+- ✅ Changing `system.txt` automatically triggers a new version
+- ✅ Changing the model or agent name triggers a new version
+- ✅ Old versions are kept (you can see them in the Azure portal)
+- ✅ Your code changes are tracked in Git
 
 ```
 Version 1: "You are a helpful assistant."
-    ↓
+    ↓ (system.txt changed)
 Version 2: "You are a friendly customer service agent..."
-    ↓
+    ↓ (restart - no change, same version kept)
+Version 2: (still current)
+    ↓ (system.txt changed again)
 Version 3: "You are a friendly customer service agent for Contoso..."
 ```
 
@@ -171,7 +186,7 @@ Version 3: "You are a friendly customer service agent for Contoso..."
 1. Open `src/api/prompts/system.txt`
 2. Edit the instructions to match what you want
 3. Restart the application
-4. A new version of your agent is created automatically!
+4. A new version is created automatically (only when changes are detected!)
 
 ### Changing the Agent's Appearance
 
