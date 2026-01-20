@@ -47,25 +47,12 @@ Unlike simple chat apps, this accelerator creates a **real agent** in Azure AI F
 
 - Azure subscription with Azure AI Foundry access
 - A deployed chat model (like gpt-5.2) in your Foundry project
-- Azure CLI or Azure Developer CLI installed
+- Python 3.10+ installed (for local development)
+- Azure CLI or Azure Developer CLI installed (for Azure deployment)
 
-### Option 1: Deploy to Azure (Recommended)
+### Option 1: Run Locally (Recommended for Getting Started)
 
-```bash
-# 1. Clone this repository
-git clone https://github.com/MaxBush6299/foundry-agent-accelerator.git
-cd foundry-agent-accelerator
-
-# 2. Login to Azure
-azd auth login
-
-# 3. Deploy everything to Azure
-azd up
-```
-
-After deployment (~10-15 minutes), you'll get a URL to your running agent!
-
-### Option 2: Run Locally
+The fastest way to get up and running. Perfect for testing and development.
 
 ```bash
 # 1. Clone and navigate to the project
@@ -85,6 +72,24 @@ uvicorn api.main:app --reload
 ```
 
 Open http://localhost:8000 in your browser.
+
+### Option 2: Deploy to Azure
+
+Once you're happy with your agent, deploy it to Azure for production use.
+
+```bash
+# 1. Clone this repository
+git clone https://github.com/MaxBush6299/foundry-agent-accelerator.git
+cd foundry-agent-accelerator
+
+# 2. Login to Azure
+azd auth login
+
+# 3. Deploy everything to Azure
+azd up
+```
+
+After deployment (~10-15 minutes), you'll get a URL to your running agent!
 
 **On startup, you'll see:**
 ```
@@ -125,13 +130,41 @@ foundry-agent-accelerator/
 │   ├── frontend/                 # Chat interface (React)
 │   │   └── src/components/      # UI components
 │   │
+│   ├── agent.yaml               # ⭐ Enable tools (Code Interpreter, Bing, etc.)
 │   ├── .env.sample              # Template for configuration
 │   └── requirements.txt         # Python packages needed
 │
 ├── .env.template                 # Environment variable template
-├── infra/                        # Azure infrastructure (Bicep)
 └── docs/                         # Documentation
 ```
+
+---
+
+## 🔧 Configuration Modes
+
+This accelerator supports two ways to configure your agent:
+
+### Local Mode (Default) - For Developers
+
+```bash
+AGENT_CONFIG_SOURCE=local
+```
+
+- Agent configured via `prompts/system.txt` (personality) and `agent.yaml` (tools)
+- Smart hash detection prevents version spam on restarts
+- Version history tracked in Git AND Foundry
+
+### Portal Mode - For Business Users
+
+```bash
+AGENT_CONFIG_SOURCE=portal
+```
+
+- Agent configured entirely in Azure AI Foundry portal
+- Local config files are ignored
+- Point-and-click configuration in the GUI
+
+See [Environment Variables](docs/environment_variables.md) for details.
 
 ---
 
@@ -158,6 +191,28 @@ understand our API and provide code examples when helpful.
 Be concise but thorough. Use markdown formatting in responses.
 ```
 
+### Enable Agent Tools
+
+Give your agent superpowers by editing `src/agent.yaml`:
+
+```yaml
+tools:
+  code_interpreter:
+    enabled: true  # Agent can run Python code!
+  
+  bing_search:
+    enabled: true
+    connection_name: "your-bing-connection"
+```
+
+**Available tools:**
+| Tool | What It Does |
+|------|--------------|
+| `code_interpreter` | Run Python code, analyze data |
+| `bing_search` | Search the web for current info |
+| `file_search` | Search uploaded documents |
+| `azure_ai_search` | Query your Azure search indexes |
+
 ### Change the Agent Name
 
 Set `AZURE_AI_AGENT_NAME` in your `.env` file:
@@ -175,6 +230,7 @@ This is the name that appears in the Azure AI Foundry portal.
 | `AZURE_EXISTING_AIPROJECT_ENDPOINT` | ✅ Yes | Your Azure AI Foundry project URL |
 | `AZURE_AI_CHAT_DEPLOYMENT_NAME` | ✅ Yes | Model name (e.g., "gpt-4o-mini") |
 | `AZURE_AI_AGENT_NAME` | ✅ Yes | Name for your agent in Foundry |
+| `AGENT_CONFIG_SOURCE` | ❌ No | `local` (default) or `portal` |
 | `AZURE_TENANT_ID` | ❌ No | Only if you have multiple tenants |
 
 ---
@@ -186,7 +242,7 @@ This is the name that appears in the Azure AI Foundry portal.
 ```
 ┌────────────────┐     ┌──────────────┐     ┌─────────────────┐
 │   system.txt   │────▶│   main.py    │────▶│  Foundry Agent  │
-│  (your code)   │     │  (creates    │     │  (persistent,   │
+│  (your code)   │     │  (creates    │      │  (persistent,   │
 │                │     │   version)   │     │   versioned)    │
 └────────────────┘     └──────────────┘     └─────────────────┘
                                                      │

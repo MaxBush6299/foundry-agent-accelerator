@@ -9,11 +9,50 @@ This document explains all the environment variables used by the Foundry Agent A
 | `AZURE_EXISTING_AIPROJECT_ENDPOINT` | ✅ Yes | - | Azure AI Foundry project endpoint |
 | `AZURE_AI_CHAT_DEPLOYMENT_NAME` | ✅ Yes | - | Name of your chat model deployment |
 | `AZURE_AI_AGENT_NAME` | ✅ Yes | `foundry-accelerator-agent` | Name for your agent in Foundry |
+| `AGENT_CONFIG_SOURCE` | ❌ No | `local` | Configuration mode: `local` or `portal` |
 | `AZURE_TENANT_ID` | ❌ No | Auto | Azure tenant ID (usually auto-detected) |
 | `AZURE_CLIENT_ID` | ❌ No | Auto | Managed identity client ID (production only) |
 | `WEB_APP_USERNAME` | ❌ No | - | Basic auth username |
 | `WEB_APP_PASSWORD` | ❌ No | - | Basic auth password |
 | `APP_LOG_FILE` | ❌ No | - | Optional log file path |
+
+---
+
+## Configuration Mode
+
+### `AGENT_CONFIG_SOURCE`
+
+**Required:** No (default: `local`)
+
+Controls where the agent configuration comes from. This is the most important setting for choosing your workflow.
+
+**Options:**
+
+| Value | Who It's For | How It Works |
+|-------|--------------|--------------|
+| `local` | Developers | Agent configured via `prompts/system.txt` and `agent.yaml` |
+| `portal` | Business Users | Agent configured in Azure AI Foundry portal |
+
+**`local` mode (default):**
+- Agent instructions come from `src/api/prompts/system.txt`
+- Tool settings come from `src/agent.yaml`
+- Changes to these files trigger a new agent version on restart
+- Version history tracked via hash detection
+
+**`portal` mode:**
+- Agent is created/managed entirely in Azure AI Foundry portal
+- Local files (`system.txt`, `agent.yaml`) are ignored
+- App simply connects to the named agent
+- Ideal for business users who prefer the GUI
+
+**Example:**
+```bash
+# For developers (default)
+AGENT_CONFIG_SOURCE=local
+
+# For business users
+AGENT_CONFIG_SOURCE=portal
+```
 
 ---
 
@@ -161,6 +200,11 @@ AZURE_AI_CHAT_DEPLOYMENT_NAME=gpt-4o-mini
 # Required - Your agent name (appears in Foundry portal)
 AZURE_AI_AGENT_NAME=my-customer-agent
 
+# Configuration mode (default: local)
+# - "local": Agent configured via prompts/system.txt and agent.yaml
+# - "portal": Agent configured in Azure AI Foundry portal (local files ignored)
+AGENT_CONFIG_SOURCE=local
+
 # Optional - Uncomment if needed
 # AZURE_TENANT_ID=12345678-1234-1234-1234-123456789012
 # WEB_APP_USERNAME=admin
@@ -175,14 +219,19 @@ AZURE_AI_AGENT_NAME=my-customer-agent
 ┌─────────────────────────────────────────────────────────────┐
 │                    ON STARTUP                                │
 │                                                              │
+│  AGENT_CONFIG_SOURCE = "local"                              │
+│         └──▶ Read prompts/system.txt and agent.yaml         │
+│         └──▶ Create/update agent with hash detection        │
+│                                                              │
+│  AGENT_CONFIG_SOURCE = "portal"                             │
+│         └──▶ Connect to existing agent by name              │
+│         └──▶ Local config files are ignored                 │
+│                                                              │
 │  AZURE_EXISTING_AIPROJECT_ENDPOINT                          │
 │         └──▶ Connect to your Foundry project                │
 │                                                              │
 │  AZURE_AI_AGENT_NAME + AZURE_AI_CHAT_DEPLOYMENT_NAME        │
-│         └──▶ Create/update agent with this model            │
-│                                                              │
-│  prompts/system.txt                                          │
-│         └──▶ Agent's instructions (from file, not env var)  │
+│         └──▶ Identify agent and model to use                │
 └─────────────────────────────────────────────────────────────┘
 ```
 

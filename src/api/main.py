@@ -4,40 +4,38 @@ FOUNDRY AGENT ACCELERATOR - Main Application Module
 =============================================================================
 
 This is the main entry point for the Foundry Agent Accelerator application.
-It sets up the FastAPI web server and creates/updates a persistent AI Agent
-in Azure AI Foundry.
+It sets up the FastAPI web server and connects to an AI Agent in Azure AI
+Foundry.
 
 WHAT THIS FILE DOES:
 --------------------
 1. Creates the web application (FastAPI)
 2. Connects to Azure AI Foundry
-3. Creates or updates a persistent AI Agent (with version history)
+3. Manages the AI Agent (local config OR portal-based)
 4. Sets up authentication credentials for Azure
 
-KEY CONCEPTS FOR BEGINNERS:
----------------------------
-- FastAPI: A Python web framework that handles HTTP requests
-- Azure AI Foundry: Microsoft's AI platform for building AI agents
-- Persistent Agent: An AI agent stored in Foundry (visible in portal, has versions)
-- Agent Version: Each time you update the agent, a new version is created
+CONFIGURATION MODES:
+--------------------
+The app supports two configuration modes, controlled by AGENT_CONFIG_SOURCE:
 
-HOW AGENT VERSIONING WORKS:
----------------------------
-1. You edit prompts/system.txt (your source of truth)
-2. You deploy/restart the app
-3. The app computes a hash of the config (model, instructions, tools)
-4. If the hash matches the previous deployment → reuse existing agent
-5. If the hash differs → create a new version in Foundry
-6. Both Git and Foundry have version history!
+LOCAL MODE (default):
+  - Agent is configured via prompts/system.txt and agent.yaml
+  - Tools are enabled via agent.yaml
+  - Hash detection prevents version spam on restarts
+  - Good for development and testing
 
-This prevents creating a new version on every restart while still
-automatically deploying changes when you modify the configuration.
+PORTAL MODE:
+  - Agent is configured entirely in Azure AI Foundry portal
+  - Local config files (prompts/system.txt, agent.yaml) are ignored
+  - Changes in portal are live immediately
+  - Good for production when business users manage the agent
 
 ENVIRONMENT VARIABLES REQUIRED:
 -------------------------------
 - AZURE_EXISTING_AIPROJECT_ENDPOINT: Your Azure AI Foundry project URL
 - AZURE_AI_CHAT_DEPLOYMENT_NAME: The name of your deployed chat model
 - AZURE_AI_AGENT_NAME: The name for your persistent agent in Foundry
+- AGENT_CONFIG_SOURCE: "local" (default) or "portal"
 
 =============================================================================
 """
@@ -52,8 +50,11 @@ import hashlib     # For computing config hash to detect changes
 import json        # For serializing config to hash
 import logging     # For printing helpful messages to the console
 import os          # For reading environment variables (configuration)
-from typing import Union  # For type hints
+from typing import Union, Any  # For type hints
 from pathlib import Path  # For handling file paths
+
+# Third-party imports
+import yaml  # For parsing agent.yaml configuration
 
 # FastAPI - The web framework that handles HTTP requests
 import fastapi
@@ -61,7 +62,17 @@ from fastapi.staticfiles import StaticFiles  # Serves static files (CSS, images,
 
 # Azure AI SDK imports
 from azure.ai.projects import AIProjectClient  # Connects to Azure AI Foundry
-from azure.ai.projects.models import PromptAgentDefinition  # For defining agents
+from azure.ai.projects.models import (
+    PromptAgentDefinition,  # For defining agents
+    CodeInterpreterTool,
+    CodeInterpreterToolAuto,
+    BingGroundingAgentTool,
+    BingGroundingSearchToolParameters,
+    BingGroundingSearchConfiguration,
+    AzureAISearchAgentTool,
+    AzureAISearchToolResource,
+    AISearchIndexResource,
+)
 
 # Azure authentication - How we prove our identity to Azure
 from azure.identity import DefaultAzureCredential, AzureCliCredential, ManagedIdentityCredential
@@ -130,7 +141,7 @@ def load_system_prompt() -> str:
 CONFIG_HASH_FILE = Path(__file__).parent / ".agent_config_hash"
 
 
-def compute_config_hash(agent_name: str, model_name: str, instructions: str) -> str:
+def compute_config_hash(agent_name: str, model_name: str, instructions: str, tools_config: dict | None = None) -> str:
     """
     Compute a SHA-256 hash of the agent configuration.
     
@@ -141,6 +152,7 @@ def compute_config_hash(agent_name: str, model_name: str, instructions: str) -> 
         agent_name: The name of the agent
         model_name: The model deployment name
         instructions: The system prompt/instructions
+        tools_config: The tools configuration from agent.yaml
         
     Returns:
         str: A hex-encoded SHA-256 hash of the configuration
@@ -149,7 +161,7 @@ def compute_config_hash(agent_name: str, model_name: str, instructions: str) -> 
         "agent_name": agent_name,
         "model_name": model_name,
         "instructions": instructions,
-        # Future: add "tools" here when tool support is added
+        "tools": tools_config or {},
     }
     config_json = json.dumps(config, sort_keys=True)
     return hashlib.sha256(config_json.encode()).hexdigest()
@@ -181,6 +193,129 @@ def store_config_hash(config_hash: str) -> None:
         CONFIG_HASH_FILE.write_text(config_hash)
     except Exception as e:
         logger.warning(f"Could not store config hash: {e}")
+
+
+# =============================================================================
+# AGENT CONFIGURATION LOADING
+# =============================================================================
+
+# Path to the agent configuration file
+AGENT_CONFIG_FILE = Path(__file__).parent.parent / "agent.yaml"
+
+
+def load_agent_config() -> dict[str, Any]:
+    """
+    Load the agent configuration from agent.yaml.
+    
+    Returns:
+        dict: The agent configuration, or empty dict if file doesn't exist
+    """
+    try:
+        if AGENT_CONFIG_FILE.exists():
+            with open(AGENT_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+                return config if config else {}
+    except Exception as e:
+        logger.warning(f"Could not load agent.yaml: {e}")
+    return {}
+
+
+def build_tools(agent_config: dict[str, Any], project_client: AIProjectClient) -> list:
+    """
+    Build the list of tools based on agent.yaml configuration.
+    
+    Args:
+        agent_config: The loaded agent configuration
+        project_client: The AIProjectClient for getting connections
+        
+    Returns:
+        list: List of tool definitions to pass to create_version
+    """
+    tools = []
+    tools_config = agent_config.get("tools", {})
+    
+    # Code Interpreter - use CodeInterpreterTool with container for PromptAgentDefinition
+    code_interpreter = tools_config.get("code_interpreter", {})
+    if code_interpreter.get("enabled", False):
+        logger.info("  📦 Enabling Code Interpreter")
+        tools.append(CodeInterpreterTool(container=CodeInterpreterToolAuto()))
+    
+    # Bing Search (Web Grounding)
+    bing_search = tools_config.get("bing_search", {})
+    if bing_search.get("enabled", False):
+        connection_name = bing_search.get("connection_name")
+        if connection_name:
+            logger.info(f"  🔍 Enabling Bing Search (connection: {connection_name})")
+            # Get connection ID from project
+            try:
+                connection = project_client.connections.get(name=connection_name)
+                tools.append(BingGroundingAgentTool(
+                    bing_grounding=BingGroundingSearchToolParameters(
+                        search_configurations=[
+                            BingGroundingSearchConfiguration(
+                                project_connection_id=connection.id
+                            )
+                        ]
+                    )
+                ))
+            except Exception as e:
+                logger.warning(f"  ⚠️ Could not enable Bing Search: {e}")
+        else:
+            logger.warning("  ⚠️ Bing Search enabled but no connection_name specified")
+    
+    # File Search - use dictionary format
+    file_search = tools_config.get("file_search", {})
+    if file_search.get("enabled", False):
+        vector_store_name = file_search.get("vector_store_name")
+        if vector_store_name:
+            logger.info(f"  📄 Enabling File Search (vector store: {vector_store_name})")
+            tools.append({
+                "type": "file_search",
+                "vector_store_ids": [vector_store_name]
+            })
+        else:
+            logger.warning("  ⚠️ File Search enabled but no vector_store_name specified")
+    
+    # Azure AI Search
+    azure_ai_search = tools_config.get("azure_ai_search", {})
+    if azure_ai_search.get("enabled", False):
+        connection_name = azure_ai_search.get("connection_name")
+        index_name = azure_ai_search.get("index_name")
+        if connection_name and index_name:
+            logger.info(f"  🔎 Enabling Azure AI Search (index: {index_name})")
+            try:
+                connection = project_client.connections.get(name=connection_name)
+                tools.append(AzureAISearchAgentTool(
+                    azure_ai_search=AzureAISearchToolResource(
+                        indexes=[
+                            AISearchIndexResource(
+                                project_connection_id=connection.id,
+                                index_name=index_name
+                            )
+                        ]
+                    )
+                ))
+            except Exception as e:
+                logger.warning(f"  ⚠️ Could not enable Azure AI Search: {e}")
+        else:
+            logger.warning("  ⚠️ Azure AI Search enabled but missing connection_name or index_name")
+    
+    return tools
+
+
+def get_tools_config_for_hash(agent_config: dict[str, Any]) -> dict:
+    """
+    Extract just the tools configuration for hashing.
+    
+    We need a stable representation for the hash computation.
+    
+    Args:
+        agent_config: The loaded agent configuration
+        
+    Returns:
+        dict: Tools configuration suitable for hashing
+    """
+    return agent_config.get("tools", {})
 
 
 # =============================================================================
@@ -242,60 +377,116 @@ async def lifespan(app: fastapi.FastAPI):
     )
     
     # -------------------------------------------------------------------------
-    # STEP 3: CREATE OR UPDATE THE PERSISTENT AGENT (WITH CHANGE DETECTION)
+    # STEP 3: CONNECT TO OR CREATE AGENT (BASED ON CONFIG SOURCE)
     # -------------------------------------------------------------------------
-    # We use a hash of the config to detect changes. This prevents creating
-    # a new version on every restart - we only create a new version when
-    # the configuration (model, instructions, tools) actually changes.
+    # Two modes are supported:
+    # - LOCAL: Agent is configured via prompts/system.txt and agent.yaml
+    # - PORTAL: Agent is configured entirely in Azure AI Foundry portal
     # -------------------------------------------------------------------------
     
     agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "foundry-accelerator-agent")
-    model_name = os.environ["AZURE_AI_CHAT_DEPLOYMENT_NAME"]
+    model_name = os.environ.get("AZURE_AI_CHAT_DEPLOYMENT_NAME", "")
+    config_source = os.environ.get("AGENT_CONFIG_SOURCE", "local").lower()
     
-    # Load the system prompt from prompts/system.txt
-    system_prompt = load_system_prompt()
+    logger.info("-" * 60)
     
-    # Compute hash of current config
-    current_hash = compute_config_hash(agent_name, model_name, system_prompt)
-    stored_hash = get_stored_config_hash()
+    if config_source == "portal":
+        # ---------------------------------------------------------------------
+        # PORTAL MODE: Agent is managed in Azure AI Foundry portal
+        # ---------------------------------------------------------------------
+        logger.info("CONFIG MODE: PORTAL")
+        logger.info("-" * 60)
+        logger.info("Agent configuration is managed in Azure AI Foundry portal.")
+        logger.info("Local files (prompts/system.txt, agent.yaml) are IGNORED.")
+        logger.info("Changes made in the portal take effect immediately.")
+        logger.info("-" * 60)
+        
+        logger.info(f"Connecting to agent: {agent_name}")
+        
+        try:
+            agent = project_client.agents.get(agent_name)
+            agent_version = getattr(agent, 'version', 'latest')
+            logger.info(f"✅ Connected to agent: {agent.name} (v{agent_version})")
+        except Exception as e:
+            logger.error(f"❌ Could not find agent '{agent_name}' in Foundry!")
+            logger.error("   Create the agent in the Azure AI Foundry portal first,")
+            logger.error("   or switch to local mode by setting AGENT_CONFIG_SOURCE=local")
+            raise RuntimeError(f"Agent '{agent_name}' not found in Foundry: {e}")
     
-    logger.info("-" * 40)
-    logger.info("CHECKING AGENT CONFIGURATION")
-    logger.info(f"  Agent Name: {agent_name}")
-    logger.info(f"  Model: {model_name}")
-    logger.info(f"  Instructions: {system_prompt[:100]}...")
-    logger.info(f"  Config Hash: {current_hash[:16]}...")
-    logger.info("-" * 40)
-    
-    if current_hash == stored_hash:
-        # Config unchanged - retrieve existing agent
-        logger.info("✅ Config unchanged - using existing agent version")
-        agent = project_client.agents.get(agent_name)
-        agent_version = getattr(agent, 'version', 'latest')
-        logger.info(f"   Retrieved: {agent.name} (v{agent_version})")
     else:
-        # Config changed - create new version
-        if stored_hash:
-            logger.info("📝 Config changed - creating new agent version")
+        # ---------------------------------------------------------------------
+        # LOCAL MODE: Agent is managed via local config files
+        # ---------------------------------------------------------------------
+        logger.info("CONFIG MODE: LOCAL")
+        logger.info("-" * 60)
+        logger.info("Agent configuration is managed via local files:")
+        logger.info("  • prompts/system.txt - Agent instructions")
+        logger.info("  • agent.yaml - Tool configuration")
+        logger.info("Portal changes will be OVERWRITTEN on restart.")
+        logger.info("-" * 60)
+        
+        if not model_name:
+            raise RuntimeError("AZURE_AI_CHAT_DEPLOYMENT_NAME is required in local mode")
+        
+        # Load configuration from local files
+        system_prompt = load_system_prompt()
+        agent_config = load_agent_config()
+        tools_config = get_tools_config_for_hash(agent_config)
+        
+        # Compute hash of current config (including tools)
+        current_hash = compute_config_hash(agent_name, model_name, system_prompt, tools_config)
+        stored_hash = get_stored_config_hash()
+        
+        logger.info("AGENT CONFIGURATION:")
+        logger.info(f"  Agent Name: {agent_name}")
+        logger.info(f"  Model: {model_name}")
+        logger.info(f"  Instructions: {system_prompt[:80]}...")
+        logger.info(f"  Config Hash: {current_hash[:16]}...")
+        
+        # Log enabled tools
+        enabled_tools = [k for k, v in tools_config.items() if isinstance(v, dict) and v.get("enabled")]
+        if enabled_tools:
+            logger.info(f"  Tools: {', '.join(enabled_tools)}")
         else:
-            logger.info("📝 First deployment - creating agent")
+            logger.info("  Tools: None")
         
-        agent = project_client.agents.create_version(
-            agent_name=agent_name,
-            definition=PromptAgentDefinition(
-                model=model_name,
-                instructions=system_prompt,
-            ),
-            description="Agent created/updated by Foundry Agent Accelerator",
-        )
+        logger.info("-" * 40)
         
-        # Store the new hash
-        store_config_hash(current_hash)
-        
-        logger.info(f"✅ New version created!")
-        logger.info(f"   ID: {agent.id}")
-        logger.info(f"   Name: {agent.name}")
-        logger.info(f"   Version: {agent.version}")
+        if current_hash == stored_hash:
+            # Config unchanged - retrieve existing agent
+            logger.info("✅ Config unchanged - using existing agent version")
+            agent = project_client.agents.get(agent_name)
+            agent_version = getattr(agent, 'version', 'latest')
+            logger.info(f"   Retrieved: {agent.name} (v{agent_version})")
+        else:
+            # Config changed - create new version
+            if stored_hash:
+                logger.info("📝 Config changed - creating new agent version")
+            else:
+                logger.info("📝 First deployment - creating agent")
+            
+            # Build tools from agent.yaml
+            logger.info("Building tools...")
+            tools = build_tools(agent_config, project_client)
+            
+            # Create the agent with tools
+            agent = project_client.agents.create_version(
+                agent_name=agent_name,
+                definition=PromptAgentDefinition(
+                    model=model_name,
+                    instructions=system_prompt,
+                    tools=tools if tools else None,
+                ),
+                description="Agent created/updated by Foundry Agent Accelerator",
+            )
+            
+            # Store the new hash
+            store_config_hash(current_hash)
+            
+            logger.info(f"✅ New version created!")
+            logger.info(f"   ID: {agent.id}")
+            logger.info(f"   Name: {agent.name}")
+            logger.info(f"   Version: {agent.version}")
     
     # -------------------------------------------------------------------------
     # STEP 4: GET THE OPENAI CLIENT FOR CHAT

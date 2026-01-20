@@ -1,0 +1,78 @@
+# =============================================================================
+# AGENT CONFIGURATION
+# =============================================================================
+#
+# This file configures your AI agent when AGENT_CONFIG_SOURCE=local
+# (which is the default). Changes here will create a new agent version
+# on next restart.
+#
+# If AGENT_CONFIG_SOURCE=portal, this file is ignored and your agent
+# is configured entirely through the Azure AI Foundry portal.
+#
+# =============================================================================
+
+# Agent instructions are loaded from prompts/system.txt
+# Edit that file to change your agent's personality and behavior.
+
+# =============================================================================
+# TOOLS
+# =============================================================================
+# Enable built-in tools for your agent. Set 'enabled: true' to activate.
+# Some tools require additional setup in Azure - see comments for details.
+#
+# Learn more: https://learn.microsoft.com/azure/ai-foundry/agents/how-to/tools
+# =============================================================================
+
+tools:
+  # ---------------------------------------------------------------------------
+  # CODE INTERPRETER
+  # ---------------------------------------------------------------------------
+  # Lets the agent write and run Python code to solve problems.
+  # Great for: math calculations, data analysis, generating charts
+  # Setup required: None - works out of the box!
+  #
+  code_interpreter:
+    enabled: True
+
+  # ---------------------------------------------------------------------------
+  # BING SEARCH (Web Grounding)
+  # ---------------------------------------------------------------------------
+  # Lets the agent search the web for current information.
+  # Great for: current events, fact-checking, research
+  # Setup required: Create a Bing Search connection in your Foundry project
+  #   1. Go to Azure AI Foundry > Your Project > Connections
+  #   2. Add a new Bing Search connection
+  #   3. Set connection_name below to match
+  #
+  bing_search:
+    enabled: false
+    # connection_name: ""  # Name of your Bing connection in Foundry
+
+  # ---------------------------------------------------------------------------
+  # FILE SEARCH (RAG over documents)
+  # ---------------------------------------------------------------------------
+  # Lets the agent search through documents you've uploaded.
+  # Great for: answering questions about your docs, knowledge bases
+  # Setup required: Create a vector store with your documents in Foundry
+  #   1. Go to Azure AI Foundry > Your Project > Vector Stores
+  #   2. Create a new vector store and upload your documents
+  #   3. Set vector_store_name below to match
+  #
+  file_search:
+    enabled: false
+    # vector_store_name: ""  # Name of your vector store in Foundry
+
+  # ---------------------------------------------------------------------------
+  # AZURE AI SEARCH
+  # ---------------------------------------------------------------------------
+  # Lets the agent search an Azure AI Search index.
+  # Great for: enterprise search, existing search infrastructure
+  # Setup required: Create an Azure AI Search connection in Foundry
+  #   1. Go to Azure AI Foundry > Your Project > Connections
+  #   2. Add an Azure AI Search connection
+  #   3. Set the connection and index names below
+  #
+  azure_ai_search:
+    enabled: false
+    # connection_name: ""  # Name of your Azure AI Search connection
+    # index_name: ""       # Name of the search index to use

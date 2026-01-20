@@ -47,6 +47,7 @@ An **agent** is a customized AI assistant. It's like giving ChatGPT a specific p
 - **A name** - How it's identified (e.g., "customer-support-agent")
 - **Instructions** - Rules that tell it how to behave (stored in `prompts/system.txt`)
 - **A model** - The underlying AI brain (like GPT-4o)
+- **Tools** - Special capabilities like running code or searching the web
 
 ### What is Azure AI Foundry?
 
@@ -66,6 +67,19 @@ The **system prompt** is like a job description for your AI agent. It tells the 
 - What it should and shouldn't do ("Don't discuss competitors")
 
 You can find and edit this in the `src/api/prompts/system.txt` file.
+
+### What are "Tools"?
+
+**Tools** give your agent special capabilities beyond just chatting. Think of them as superpowers:
+
+| Tool | What It Does | Example Use Case |
+|------|--------------|------------------|
+| **Code Interpreter** | Run Python code | Calculate complex math, analyze data |
+| **Bing Search** | Search the web | Answer questions about current events |
+| **File Search** | Search uploaded documents | Find information in your PDFs |
+| **Azure AI Search** | Query your databases | Look up product information |
+
+You can enable/disable tools in the `src/agent.yaml` file (in local mode) or through the portal (in portal mode).
 
 ### What is "Streaming"?
 
@@ -126,6 +140,13 @@ Here's what the main files and folders do:
 | `prompts/system.txt` | Contains your agent's personality and instructions |
 | `util.py` | Helper functions used by other files |
 
+### `/src/` - Configuration Files
+
+| File | What It Does |
+|------|--------------|
+| `agent.yaml` | Enables/disables tools like Code Interpreter, Bing Search |
+| `.env` | Your Azure credentials and settings |
+
 ### `/src/frontend/` - The Chat Interface (React)
 
 | Folder/File | What It Does |
@@ -150,12 +171,13 @@ One powerful feature of this project is **smart version history**. The applicati
 
 ### Smart Change Detection
 
-When the application starts, it:
+When the application starts (in `local` mode), it:
 
 1. Computes a "fingerprint" (hash) of your current configuration
    - Agent name
    - Model name  
    - System prompt instructions
+   - Enabled tools
 2. Compares it to the fingerprint from the last deployment
 3. **If unchanged** → Uses the existing agent (no new version)
 4. **If changed** → Creates a new version in Azure
@@ -164,6 +186,7 @@ This means:
 - ✅ Restarting the app doesn't spam new versions
 - ✅ Changing `system.txt` automatically triggers a new version
 - ✅ Changing the model or agent name triggers a new version
+- ✅ Enabling/disabling tools triggers a new version
 - ✅ Old versions are kept (you can see them in the Azure portal)
 - ✅ Your code changes are tracked in Git
 
@@ -173,9 +196,55 @@ Version 1: "You are a helpful assistant."
 Version 2: "You are a friendly customer service agent..."
     ↓ (restart - no change, same version kept)
 Version 2: (still current)
-    ↓ (system.txt changed again)
-Version 3: "You are a friendly customer service agent for Contoso..."
+    ↓ (enabled Code Interpreter tool)
+Version 3: Same prompt, now with code execution!
 ```
+
+---
+
+## Two Ways to Configure Your Agent
+
+This accelerator supports two configuration modes, controlled by the `AGENT_CONFIG_SOURCE` environment variable:
+
+### Local Mode (Default) - For Developers
+
+```
+AGENT_CONFIG_SOURCE=local
+```
+
+In local mode, your agent is configured through files in your codebase:
+- `src/api/prompts/system.txt` - Agent personality and instructions
+- `src/agent.yaml` - Tools and capabilities
+
+**Benefits:**
+- ✅ Version control (changes tracked in Git)
+- ✅ Easy testing and iteration
+- ✅ Smart hash detection (no version spam)
+- ✅ Infrastructure as code
+
+### Portal Mode - For Business Users
+
+```
+AGENT_CONFIG_SOURCE=portal
+```
+
+In portal mode, your agent is configured entirely through the Azure AI Foundry web portal:
+- Local config files (`system.txt`, `agent.yaml`) are ignored
+- The app simply connects to the named agent
+
+**Benefits:**
+- ✅ No code editing required
+- ✅ Point-and-click configuration
+- ✅ Easier for non-technical users
+- ✅ Changes take effect immediately in the portal
+
+**When to use each:**
+| Scenario | Recommended Mode |
+|----------|-----------------|
+| Development and testing | `local` |
+| Business user customization | `portal` |
+| Production with strict version control | `local` |
+| Quick experimentation | `portal` |
 
 ---
 

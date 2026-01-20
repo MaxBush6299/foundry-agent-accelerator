@@ -21,11 +21,19 @@ The key difference from a regular chat app: **The chef (agent) is a real person 
 ┌─────────────────────────────────────────────────────────────┐
 │                    ON STARTUP                                │
 │                                                              │
-│  1. Read system.txt (the recipe book)                       │
-│  2. Compute config hash (fingerprint of current settings)   │
-│  3. Compare to previous deployment hash                      │
-│  4. If changed → create_version (new version!)              │
-│     If same → reuse existing agent (no spam!)               │
+│  1. Check AGENT_CONFIG_SOURCE (local or portal?)            │
+│                                                              │
+│  If LOCAL mode:                                              │
+│  ├── Read system.txt (the recipe book)                      │
+│  ├── Read agent.yaml (tools and capabilities)               │
+│  ├── Compute config hash (fingerprint of settings + tools)  │
+│  ├── Compare to previous deployment hash                     │
+│  ├── If changed → create_version (new version!)             │
+│  └── If same → reuse existing agent (no spam!)              │
+│                                                              │
+│  If PORTAL mode:                                             │
+│  └── Just connect to the named agent (files ignored)        │
+│                                                              │
 │  5. Chef ready to serve!                                     │
 └─────────────────────────────────────────────────────────────┘
 
@@ -51,6 +59,8 @@ The key difference from a regular chat app: **The chef (agent) is a real person 
 
 **The magic:** When you restart, a NEW VERSION of your agent is created in Foundry. You get version history both in Git AND in the Foundry portal!
 
+**Note:** Only used in `local` mode. In `portal` mode, this file is ignored.
+
 **Example:**
 ```
 You are a helpful customer support agent for Acme Corp.
@@ -60,23 +70,56 @@ say "I'll need to check on that for you."
 
 ---
 
-### 2. `src/api/main.py` - The Kitchen Setup
+### 2. `src/agent.yaml` - The Tools Menu
+
+**What it is:** A configuration file that enables built-in agent tools.
+
+**Why it matters:** You can give your agent superpowers like running code, searching the web, or querying databases - just by enabling options in this file!
+
+**Available tools:**
+- **Code Interpreter** - Agent can write and run Python code
+- **Bing Search** - Agent can search the web for current information
+- **File Search** - Agent can search through uploaded documents
+- **Azure AI Search** - Agent can query your Azure search indexes
+
+**Note:** Only used in `local` mode. In `portal` mode, configure tools in the Foundry UI.
+
+**Example:**
+```yaml
+tools:
+  code_interpreter:
+    enabled: true  # Agent can now run code!
+  
+  bing_search:
+    enabled: false
+    connection_name: "my-bing-connection"
+```
+
+---
+
+### 3. `src/api/main.py` - The Kitchen Setup
 
 **What it is:** Code that runs when the application starts.
 
-**What happens:**
+**What happens (local mode):**
 1. Loads settings from the `.env` file
 2. Logs into Azure using your credentials
-3. **Computes a hash of the current config** (model + prompt + agent name)
-4. **Compares to the stored hash** from the last deployment
-5. If changed → Creates a new agent version in Foundry
-6. If unchanged → Reuses the existing agent (no version spam!)
-7. Gets ready to route messages to the agent
+3. Loads `system.txt` and `agent.yaml`
+4. Builds the list of enabled tools
+5. **Computes a hash of the current config** (model + prompt + agent name + tools)
+6. **Compares to the stored hash** from the last deployment
+7. If changed → Creates a new agent version in Foundry
+8. If unchanged → Reuses the existing agent (no version spam!)
+
+**What happens (portal mode):**
+1. Loads settings from the `.env` file
+2. Logs into Azure using your credentials
+3. Connects to the named agent (local files ignored)
 
 **The smart version detection:**
 ```python
-# Compute hash of current config
-current_hash = compute_config_hash(agent_name, model_name, system_prompt)
+# Compute hash of current config (including tools!)
+current_hash = compute_config_hash(agent_name, model_name, system_prompt, tools_config)
 stored_hash = get_stored_config_hash()
 
 if current_hash == stored_hash:

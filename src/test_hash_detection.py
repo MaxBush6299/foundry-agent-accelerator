@@ -29,6 +29,8 @@ from api.main import (
     store_config_hash,
     CONFIG_HASH_FILE,
     load_system_prompt,
+    load_agent_config,
+    get_tools_config_for_hash,
 )
 
 
@@ -38,9 +40,9 @@ def test_hash_computation():
     print("TEST 1: Hash Computation (Local)")
     print("=" * 60)
     
-    hash1 = compute_config_hash("my-agent", "gpt-4o", "You are helpful")
-    hash2 = compute_config_hash("my-agent", "gpt-4o", "You are helpful")
-    hash3 = compute_config_hash("my-agent", "gpt-4o", "You are HELPFUL")  # Different!
+    hash1 = compute_config_hash("my-agent", "gpt-4o", "You are helpful", {})
+    hash2 = compute_config_hash("my-agent", "gpt-4o", "You are helpful", {})
+    hash3 = compute_config_hash("my-agent", "gpt-4o", "You are HELPFUL", {})  # Different!
     
     print(f"Hash 1: {hash1[:32]}...")
     print(f"Hash 2: {hash2[:32]}...")
@@ -48,6 +50,15 @@ def test_hash_computation():
     
     assert hash1 == hash2, "Same config should produce same hash!"
     assert hash1 != hash3, "Different config should produce different hash!"
+    
+    # Test that tools affect hash
+    hash_no_tools = compute_config_hash("my-agent", "gpt-4o", "You are helpful", {})
+    hash_with_tools = compute_config_hash("my-agent", "gpt-4o", "You are helpful", {"code_interpreter": {"enabled": True}})
+    
+    print(f"\nHash (no tools): {hash_no_tools[:32]}...")
+    print(f"Hash (with tools): {hash_with_tools[:32]}...")
+    
+    assert hash_no_tools != hash_with_tools, "Different tools should produce different hash!"
     
     print("✅ PASSED: Hash computation is deterministic and change-sensitive")
 
@@ -81,6 +92,7 @@ def test_change_detection_scenario():
     
     agent_name = "test-agent"
     model_name = "gpt-4o-mini"
+    tools_config: dict = {}
     
     # Scenario 1: First deployment (no stored hash)
     print("\n--- Scenario 1: First Deployment ---")
@@ -94,13 +106,13 @@ def test_change_detection_scenario():
     
     # Simulate storing after first deployment
     first_prompt = "You are a helpful assistant."
-    first_hash = compute_config_hash(agent_name, model_name, first_prompt)
+    first_hash = compute_config_hash(agent_name, model_name, first_prompt, tools_config)
     store_config_hash(first_hash)
     print(f"Stored first hash: {first_hash[:32]}...")
     
     # Scenario 2: Restart without changes
     print("\n--- Scenario 2: Restart Without Changes ---")
-    current_hash = compute_config_hash(agent_name, model_name, first_prompt)
+    current_hash = compute_config_hash(agent_name, model_name, first_prompt, tools_config)
     stored_hash = get_stored_config_hash()
     
     print(f"Current hash: {current_hash[:32]}...")
@@ -116,7 +128,7 @@ def test_change_detection_scenario():
     # Scenario 3: Change the prompt
     print("\n--- Scenario 3: Prompt Changed ---")
     new_prompt = "You are a friendly customer service agent."
-    new_hash = compute_config_hash(agent_name, model_name, new_prompt)
+    new_hash = compute_config_hash(agent_name, model_name, new_prompt, tools_config)
     stored_hash = get_stored_config_hash()
     
     print(f"New hash:    {new_hash[:32]}...")
@@ -131,7 +143,7 @@ def test_change_detection_scenario():
     
     # Scenario 4: Change the model
     print("\n--- Scenario 4: Model Changed ---")
-    different_model_hash = compute_config_hash(agent_name, "gpt-4o", first_prompt)
+    different_model_hash = compute_config_hash(agent_name, "gpt-4o", first_prompt, tools_config)
     
     print(f"Different model hash: {different_model_hash[:32]}...")
     print(f"Stored hash:          {stored_hash[:32]}...")
@@ -139,22 +151,38 @@ def test_change_detection_scenario():
     assert different_model_hash != stored_hash, "Different model should trigger new version!"
     print("→ Would CREATE new version ✓")
     
+    # Scenario 5: Enable a tool
+    print("\n--- Scenario 5: Tool Enabled ---")
+    tools_with_code_interpreter = {"code_interpreter": {"enabled": True}}
+    tool_hash = compute_config_hash(agent_name, model_name, first_prompt, tools_with_code_interpreter)
+    
+    print(f"With tool hash:  {tool_hash[:32]}...")
+    print(f"Stored hash:     {stored_hash[:32]}...")
+    
+    assert tool_hash != stored_hash, "Enabling tool should trigger new version!"
+    print("→ Would CREATE new version ✓")
+    
     print("\n✅ PASSED: Change detection scenarios work correctly")
 
 
 def test_with_real_prompt():
-    """Test with the actual system prompt file."""
+    """Test with the actual system prompt and agent.yaml."""
     print("\n" + "=" * 60)
-    print("TEST 4: Real System Prompt (Local)")
+    print("TEST 4: Real System Prompt & Agent Config (Local)")
     print("=" * 60)
     
     prompt = load_system_prompt()
     print(f"Loaded prompt ({len(prompt)} chars): {prompt[:80]}...")
     
+    agent_config = load_agent_config()
+    tools_config = get_tools_config_for_hash(agent_config)
+    enabled_tools = [k for k, v in tools_config.items() if isinstance(v, dict) and v.get("enabled")]
+    print(f"Enabled tools: {enabled_tools if enabled_tools else 'None'}")
+    
     agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "test-agent")
     model_name = os.environ.get("AZURE_AI_CHAT_DEPLOYMENT_NAME", "gpt-4o-mini")
     
-    real_hash = compute_config_hash(agent_name, model_name, prompt)
+    real_hash = compute_config_hash(agent_name, model_name, prompt, tools_config)
     print(f"Real config hash: {real_hash[:32]}...")
     
     stored = get_stored_config_hash()
@@ -211,12 +239,17 @@ def test_live_foundry():
         endpoint=endpoint,
     )
     
-    # Load the system prompt
+    # Load the system prompt and agent config
     system_prompt = load_system_prompt()
     print(f"System prompt: {system_prompt[:50]}...")
     
+    agent_config = load_agent_config()
+    tools_config = get_tools_config_for_hash(agent_config)
+    enabled_tools = [k for k, v in tools_config.items() if isinstance(v, dict) and v.get("enabled")]
+    print(f"Enabled tools: {enabled_tools if enabled_tools else 'None'}")
+    
     # Compute hash
-    current_hash = compute_config_hash(agent_name, model_name, system_prompt)
+    current_hash = compute_config_hash(agent_name, model_name, system_prompt, tools_config)
     stored_hash = get_stored_config_hash()
     
     print(f"\nCurrent hash: {current_hash[:32]}...")

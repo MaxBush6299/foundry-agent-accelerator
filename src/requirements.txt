@@ -26,6 +26,12 @@ gunicorn==23.0.0        # Production server (runs the app in Azure)
 jinja2                  # Template engine for HTML pages
 
 # -----------------------------------------------------------------------------
+# CONFIGURATION
+# -----------------------------------------------------------------------------
+pyyaml                  # For parsing agent.yaml configuration
+python-dotenv           # For loading .env files
+
+# -----------------------------------------------------------------------------
 # AZURE AUTHENTICATION
 # -----------------------------------------------------------------------------
 azure-identity==1.19.0  # Handles login/authentication with Azure
