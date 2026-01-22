@@ -76,3 +76,35 @@ tools:
     enabled: false
     # connection_name: ""  # Name of your Azure AI Search connection
     # index_name: ""       # Name of the search index to use
+
+  # ---------------------------------------------------------------------------
+  # IMAGE GENERATION (Preview)
+  # ---------------------------------------------------------------------------
+  # Lets the agent generate images using DALL-E / gpt-image-1.
+  # Great for: creating visuals, diagrams, illustrations on demand
+  # Setup required:
+  #   1. Go to Azure AI Foundry > Your Project > Deployments
+  #   2. Deploy the gpt-image-1 model
+  #   3. Set IMAGE_GENERATION_DEPLOYMENT_NAME in your .env file
+  #
+  image_generation:
+    enabled: True
+    quality: "auto"      # low, medium, high, or auto
+    size: "1024x1024"    # Image dimensions
+
+  # ---------------------------------------------------------------------------
+  # WEB SEARCH (Preview)
+  # ---------------------------------------------------------------------------
+  # Lets the agent search the web for real-time information with citations.
+  # Great for: current events, fact-checking, up-to-date research
+  # Setup required: None - uses Grounding with Bing Search (incurs costs)
+  #   Note: Data is sent to Bing Search outside Azure compliance boundaries.
+  #   Admin can disable via: az feature register --name OpenAI.BlockedTools.web_search
+  #
+  # Modes available (configured via model choice):
+  #   - Non-reasoning: Fast lookups with standard models
+  #   - Reasoning: Multi-step search with gpt-5
+  #   - Deep Research: Extended investigation with o3-deep-research
+  #
+  web_search:
+    enabled: false

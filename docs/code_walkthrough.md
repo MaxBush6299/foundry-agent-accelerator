@@ -78,9 +78,11 @@ say "I'll need to check on that for you."
 
 **Available tools:**
 - **Code Interpreter** - Agent can write and run Python code
-- **Bing Search** - Agent can search the web for current information
+- **Bing Search** - Agent can search the web for current information (requires connection)
 - **File Search** - Agent can search through uploaded documents
 - **Azure AI Search** - Agent can query your Azure search indexes
+- **Image Generation** - Agent can generate images using DALL-E/gpt-image-1 (preview)
+- **Web Search** - Agent can search the web with real-time citations (preview)
 
 **Note:** Only used in `local` mode. In `portal` mode, configure tools in the Foundry UI.
 

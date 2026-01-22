@@ -75,9 +75,11 @@ You can find and edit this in the `src/api/prompts/system.txt` file.
 | Tool | What It Does | Example Use Case |
 |------|--------------|------------------|
 | **Code Interpreter** | Run Python code | Calculate complex math, analyze data |
-| **Bing Search** | Search the web | Answer questions about current events |
+| **Bing Search** | Search the web (via connection) | Answer questions about current events |
 | **File Search** | Search uploaded documents | Find information in your PDFs |
 | **Azure AI Search** | Query your databases | Look up product information |
+| **Image Generation** | Create images with AI | Generate diagrams, illustrations, visuals |
+| **Web Search** | Real-time web search with citations | Research, fact-checking (preview) |
 
 You can enable/disable tools in the `src/agent.yaml` file (in local mode) or through the portal (in portal mode).
 

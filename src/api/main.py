@@ -72,6 +72,8 @@ from azure.ai.projects.models import (
     AzureAISearchAgentTool,
     AzureAISearchToolResource,
     AISearchIndexResource,
+    ImageGenTool,  # For image generation
+    WebSearchPreviewTool,  # For web search (preview)
 )
 
 # Azure authentication - How we prove our identity to Azure
@@ -300,6 +302,24 @@ def build_tools(agent_config: dict[str, Any], project_client: AIProjectClient) -
         else:
             logger.warning("  ⚠️ Azure AI Search enabled but missing connection_name or index_name")
     
+    # Image Generation
+    image_gen = tools_config.get("image_generation", {})
+    if image_gen.get("enabled", False):
+        deployment = os.environ.get("IMAGE_GENERATION_DEPLOYMENT_NAME")
+        quality = image_gen.get("quality", "auto")
+        size = image_gen.get("size", "1024x1024")
+        if deployment:
+            logger.info(f"  🎨 Enabling Image Generation (deployment: {deployment}, quality: {quality}, size: {size})")
+            tools.append(ImageGenTool(quality=quality, size=size))
+        else:
+            logger.warning("  ⚠️ Image Generation enabled but IMAGE_GENERATION_DEPLOYMENT_NAME not set")
+    
+    # Web Search (Preview) - uses Grounding with Bing Search
+    web_search = tools_config.get("web_search", {})
+    if web_search.get("enabled", False):
+        logger.info("  🌐 Enabling Web Search (preview)")
+        tools.append(WebSearchPreviewTool())
+    
     return tools
 
 
@@ -505,6 +525,13 @@ async def lifespan(app: fastapi.FastAPI):
     app.state.openai_client = openai_client
     app.state.agent = agent
     app.state.agent_name = agent_name
+    
+    # Store image generation deployment name if enabled (needed for extra_headers)
+    image_gen_config = tools_config.get("image_generation", {})
+    if image_gen_config.get("enabled", False):
+        app.state.image_generation_deployment = os.environ.get("IMAGE_GENERATION_DEPLOYMENT_NAME")
+    else:
+        app.state.image_generation_deployment = None
     
     agent_version = getattr(agent, 'version', 'latest')
     logger.info("=" * 60)

@@ -44,6 +44,7 @@ DIFFERENCE FROM DIRECT CHAT COMPLETION:
 import json      # For converting Python objects to JSON strings
 import logging   # For logging messages to console
 import os        # For reading environment variables and file paths
+import re        # For regex pattern matching
 import secrets   # For secure string comparison (authentication)
 from typing import Dict, Optional  # Type hints for better code readability
 
@@ -142,6 +143,16 @@ def get_agent(request: Request):
     return request.app.state.agent
 
 
+def get_image_generation_deployment(request: Request) -> str | None:
+    """
+    Get the image generation deployment name from app state.
+    
+    This is needed to pass the x-ms-oai-image-generation-deployment header
+    when image generation tool is enabled.
+    """
+    return getattr(request.app.state, 'image_generation_deployment', None)
+
+
 # =============================================================================
 # SSE (Server-Sent Events) HELPER
 # =============================================================================
@@ -154,6 +165,114 @@ def serialize_sse_event(data: Dict) -> str:
     Each message must be formatted as: "data: {json}\n\n"
     """
     return f"data: {json.dumps(data)}\n\n"
+
+
+def format_code_interpreter_output(content: str) -> str:
+    """
+    Detect and wrap raw code interpreter output in markdown code fences.
+    
+    Code interpreter output typically starts with import statements and
+    contains Python code that should be formatted nicely in the UI.
+    
+    Args:
+        content: The raw response content from the agent
+        
+    Returns:
+        str: Content with code interpreter blocks wrapped in ```python fences
+    """
+    lines = content.split('\n')
+    result_lines = []
+    code_block = []
+    in_code_block = False
+    
+    def is_code_line(line: str) -> bool:
+        """Check if a line looks like Python code."""
+        stripped = line.strip()
+        if not stripped:
+            return in_code_block  # Empty lines continue code blocks
+        
+        # NEVER treat markdown syntax as code
+        # Markdown headings (## Heading)
+        if re.match(r'^#{1,6}\s+\S', stripped):
+            return False
+        # Markdown images ![alt](url)
+        if re.match(r'^!\[.*?\]\(.*?\)$', stripped):
+            return False
+        # Base64 data URIs
+        if 'data:image/' in stripped:
+            return False
+        # Markdown bold/italic at start of line
+        if re.match(r'^\*{1,2}\w', stripped) or re.match(r'^_{1,2}\w', stripped):
+            return False
+        # Numbered lists with text (1. **Something**)
+        if re.match(r'^\d+\.\s+\*{0,2}\w', stripped):
+            return False
+        
+        # Definite code patterns - must be actual Python code
+        code_patterns = [
+            stripped.startswith(('import ', 'from ')),
+            # Python comments start with # followed by space, but exclude markdown headings
+            stripped.startswith('# ') and not re.match(r'^#\s+[A-Z][a-z]+', stripped),
+            stripped.startswith(('def ', 'class ', 'if ', 'for ', 'while ', 'with ', 'try:', 'except')),
+            '=' in stripped and not stripped.endswith(':') and not stripped.startswith(('**', '*', '-', '•')),
+            stripped.startswith(('plt.', 'img.', 'df.', 'np.', 'pd.')),
+            '/mnt/data/' in stripped,
+            re.match(r'^[a-z_][a-z0-9_]*\.[a-z_]+\(', stripped),  # method calls like img.size()
+            re.match(r'^[a-z_][a-z0-9_]*\(', stripped),  # function calls like print()
+        ]
+        return any(code_patterns)
+    
+    def is_prose_line(line: str) -> bool:
+        """Check if a line looks like natural language prose."""
+        stripped = line.strip()
+        if not stripped:
+            return False
+        # Prose typically starts with capital letter and contains spaces/words
+        if re.match(r'^[A-Z][a-z]+.*\s+\w+', stripped):
+            # But exclude things that look like code
+            if not any(c in stripped for c in ['(', ')', '=', '.', '/']):
+                return True
+            # Check if it's a sentence (ends with punctuation or contains common words)
+            if re.search(r'(the |is |are |a |an |this |that |hazard|visible|image|worker)', stripped, re.IGNORECASE):
+                return True
+        # Bullet points are prose
+        if stripped.startswith(('- ', '* ', '• ')):
+            return True
+        return False
+    
+    for line in lines:
+        if is_prose_line(line) and in_code_block:
+            # End the code block
+            if code_block:
+                result_lines.append('```python')
+                result_lines.extend(code_block)
+                result_lines.append('```')
+                code_block = []
+            in_code_block = False
+            result_lines.append(line)
+        elif is_code_line(line):
+            in_code_block = True
+            code_block.append(line)
+        elif in_code_block and line.strip():
+            # Continue code block with non-empty lines that might be code
+            code_block.append(line)
+        else:
+            if in_code_block and code_block:
+                # End code block on empty line if we have content
+                result_lines.append('```python')
+                result_lines.extend(code_block)
+                result_lines.append('```')
+                code_block = []
+                in_code_block = False
+            result_lines.append(line)
+    
+    # Handle any remaining code block
+    if code_block:
+        result_lines.append('```python')
+        result_lines.extend(code_block)
+        result_lines.append('```')
+    
+    return '\n'.join(result_lines)
 
 
 # =============================================================================
@@ -179,6 +298,7 @@ async def index(request: Request, _ = auth_dependency):
 
 @router.post("/chat")
 async def chat_stream_handler(
+    request: Request,
     chat_request: ChatRequest,
     openai_client = Depends(get_openai_client),
     agent = Depends(get_agent),
@@ -287,11 +407,18 @@ async def chat_stream_handler(
             
             logger.info(f"Sending request to agent: {agent.name}")
             
+            # Check if image generation is enabled (requires special header)
+            image_gen_deployment = get_image_generation_deployment(request)
+            extra_headers = {}
+            if image_gen_deployment:
+                extra_headers["x-ms-oai-image-generation-deployment"] = image_gen_deployment
+            
             # Call the agent using the responses API with streaming
             # The extra_body specifies which agent to use
             response = openai_client.responses.create(
                 input=input_messages,
                 stream=True,
+                extra_headers=extra_headers if extra_headers else None,
                 extra_body={
                     "agent": {
                         "name": agent.name,
@@ -302,12 +429,82 @@ async def chat_stream_handler(
             
             # Process the streaming response
             for event in response:
-                # Check for text content in the response
-                if hasattr(event, 'output_text') and event.output_text:
-                    # For non-streaming chunks, get the full text
+                event_type = getattr(event, 'type', None)
+                
+                # Handle text output done event
+                if event_type == 'response.output_text.done':
+                    if hasattr(event, 'text') and event.text:
+                        accumulated_message += event.text
+                        yield serialize_sse_event({
+                            "content": event.text,
+                            "type": "message",
+                        })
+                        logger.info(f"Text output: {event.text[:100]}...")
+                
+                # Handle partial image event (streaming partial images)
+                elif event_type == 'response.image_generation_call.partial_image':
+                    if hasattr(event, 'partial_image_b64') and event.partial_image_b64:
+                        # Use raw HTML img tag instead of markdown (more reliable with base64)
+                        image_html = f'<img src="data:image/png;base64,{event.partial_image_b64}" alt="Generated Image (partial)" style="max-width: 100%; border-radius: 8px;" />'
+                        yield serialize_sse_event({
+                            "content": image_html,
+                            "type": "message",
+                        })
+                        logger.info("Sent partial image")
+                
+                # Handle output item done event (contains completed image)
+                elif event_type == 'response.output_item.done':
+                    if hasattr(event, 'item') and event.item:
+                        item = event.item
+                        item_type = getattr(item, 'type', None)
+                        logger.info(f"Output item done - type: {item_type}")
+                        
+                        if item_type == 'image_generation_call':
+                            # Get the result (base64 image data)
+                            if hasattr(item, 'result') and item.result:
+                                image_base64 = item.result
+                                # Use raw HTML img tag instead of markdown (more reliable with base64)
+                                image_html = f'\n\n<img src="data:image/png;base64,{image_base64}" alt="Generated Image" style="max-width: 100%; border-radius: 8px; margin: 16px 0;" />\n\n'
+                                accumulated_message += image_html
+                                yield serialize_sse_event({
+                                    "content": image_html,
+                                    "type": "message",
+                                })
+                                logger.info("Image generation completed - sent final image")
+                
+                # Handle response completed event (final response with all outputs)
+                elif event_type == 'response.completed':
+                    if hasattr(event, 'response') and event.response:
+                        resp = event.response
+                        if hasattr(resp, 'output') and resp.output:
+                            for output_item in resp.output:
+                                item_type = getattr(output_item, 'type', None)
+                                if item_type == 'image_generation_call' and hasattr(output_item, 'result') and output_item.result:
+                                    # Only add if not already sent
+                                    if 'Generated Image' not in accumulated_message:
+                                        image_base64 = output_item.result
+                                        # Use raw HTML img tag instead of markdown (more reliable with base64)
+                                        image_html = f'\n\n<img src="data:image/png;base64,{image_base64}" alt="Generated Image" style="max-width: 100%; border-radius: 8px; margin: 16px 0;" />\n\n'
+                                        accumulated_message += image_html
+                                        yield serialize_sse_event({
+                                            "content": image_html,
+                                            "type": "message",
+                                        })
+                                        logger.info("Image from completed response")
+                                elif item_type == 'message' and hasattr(output_item, 'content'):
+                                    for content_part in output_item.content:
+                                        if hasattr(content_part, 'text') and content_part.text:
+                                            if content_part.text not in accumulated_message:
+                                                accumulated_message += content_part.text
+                                                yield serialize_sse_event({
+                                                    "content": content_part.text,
+                                                    "type": "message",
+                                                })
+                
+                # Fallback: Check for text content in legacy format
+                elif hasattr(event, 'output_text') and event.output_text:
                     chunk_text = event.output_text
                     if chunk_text and chunk_text != accumulated_message:
-                        # Calculate the new content (delta)
                         new_content = chunk_text[len(accumulated_message):]
                         if new_content:
                             accumulated_message = chunk_text
@@ -328,8 +525,12 @@ async def chat_stream_handler(
             
             # Send the complete message at the end
             logger.info(f"Response complete: {len(accumulated_message)} characters")
+            
+            # Format code interpreter output before sending
+            formatted_message = format_code_interpreter_output(accumulated_message)
+            
             yield serialize_sse_event({
-                "content": accumulated_message,
+                "content": formatted_message,
                 "type": "completed_message",
             })
             

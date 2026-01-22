@@ -206,12 +206,16 @@ tools:
 ```
 
 **Available tools:**
-| Tool | What It Does |
-|------|--------------|
-| `code_interpreter` | Run Python code, analyze data |
-| `bing_search` | Search the web for current info |
-| `file_search` | Search uploaded documents |
-| `azure_ai_search` | Query your Azure search indexes |
+| Tool | What It Does | Setup Required |
+|------|--------------|----------------|
+| `code_interpreter` | Run Python code, analyze data | None - works out of the box! |
+| `bing_search` | Search the web (via Bing connection) | Create Bing connection in Foundry |
+| `file_search` | Search uploaded documents | Create vector store in Foundry |
+| `azure_ai_search` | Query your Azure search indexes | Create AI Search connection |
+| `image_generation` | Generate images with gpt-image-1 | Deploy gpt-image-1 model |
+| `web_search` | Real-time web search with citations | None - uses Bing Search (preview) |
+
+> **Note:** `image_generation` and `web_search` are preview features. See [Azure docs](https://learn.microsoft.com/azure/ai-foundry/agents/how-to/tools) for details.
 
 ### Change the Agent Name
 

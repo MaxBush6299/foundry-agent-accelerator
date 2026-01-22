@@ -4,6 +4,15 @@
   color: var(--colorNeutralForeground1);
 }
 
+/* Generated images from AI image generation */
+.generatedImage {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 16px 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
 .markdown p {
   margin-bottom: 16px;
 }
@@ -119,4 +128,59 @@
 
 .markdown tr:nth-child(even) {
   background-color: var(--colorNeutralBackground2);
+}
+
+/* Code Interpreter Collapsible Section */
+.codeInterpreterDetails {
+  margin: 16px 0;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.codeInterpreterDetails[open] {
+  background-color: var(--colorNeutralBackground2);
+}
+
+.codeInterpreterSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  background-color: var(--colorNeutralBackground3);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--colorNeutralForeground2);
+  user-select: none;
+  list-style: none;
+}
+
+.codeInterpreterSummary::-webkit-details-marker {
+  display: none;
+}
+
+.codeInterpreterSummary::before {
+  content: "▶";
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+.codeInterpreterDetails[open] .codeInterpreterSummary::before {
+  transform: rotate(90deg);
+}
+
+.codeInterpreterSummary:hover {
+  background-color: var(--colorNeutralBackground4);
+}
+
+.codeInterpreterIcon {
+  font-size: 14px;
+}
+
+.codeInterpreterDetails .codeBlock {
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--colorNeutralStroke2);
+  border-radius: 0;
 }

@@ -10,6 +10,7 @@ This document explains all the environment variables used by the Foundry Agent A
 | `AZURE_AI_CHAT_DEPLOYMENT_NAME` | ✅ Yes | - | Name of your chat model deployment |
 | `AZURE_AI_AGENT_NAME` | ✅ Yes | `foundry-accelerator-agent` | Name for your agent in Foundry |
 | `AGENT_CONFIG_SOURCE` | ❌ No | `local` | Configuration mode: `local` or `portal` |
+| `IMAGE_GENERATION_DEPLOYMENT_NAME` | ❌ No | - | Deployment name for gpt-image-1 (if using image generation) |
 | `AZURE_TENANT_ID` | ❌ No | Auto | Azure tenant ID (usually auto-detected) |
 | `AZURE_CLIENT_ID` | ❌ No | Auto | Managed identity client ID (production only) |
 | `WEB_APP_USERNAME` | ❌ No | - | Basic auth username |
@@ -171,6 +172,29 @@ WEB_APP_PASSWORD=your-secure-password-here
 
 ---
 
+## Tool-Specific Variables
+
+### `IMAGE_GENERATION_DEPLOYMENT_NAME`
+
+**Required:** No (only if using image generation tool)
+
+The deployment name of your `gpt-image-1` model. Required when enabling the image generation tool in `agent.yaml`.
+
+**How to set up:**
+1. Go to your Azure AI Foundry project
+2. Click "Deployments"
+3. Deploy the `gpt-image-1` model
+4. Set this variable to the deployment name
+
+**Example:**
+```
+IMAGE_GENERATION_DEPLOYMENT_NAME=gpt-image-1
+```
+
+**Note:** Image generation is currently a preview feature.
+
+---
+
 ## Logging Variables
 
 ### `APP_LOG_FILE`
@@ -204,6 +228,9 @@ AZURE_AI_AGENT_NAME=my-customer-agent
 # - "local": Agent configured via prompts/system.txt and agent.yaml
 # - "portal": Agent configured in Azure AI Foundry portal (local files ignored)
 AGENT_CONFIG_SOURCE=local
+
+# Optional - For image generation tool (deploy gpt-image-1 first)
+# IMAGE_GENERATION_DEPLOYMENT_NAME=gpt-image-1
 
 # Optional - Uncomment if needed
 # AZURE_TENANT_ID=12345678-1234-1234-1234-123456789012
