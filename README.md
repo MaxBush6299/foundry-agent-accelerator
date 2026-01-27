@@ -11,6 +11,7 @@ This accelerator gives you a **working AI agent** that:
 - **Has version history** - Every change creates a new version (both in Git AND Foundry)
 - **Deploys to Azure** in minutes
 - **Customizable** by editing simple text files (no coding required for basic changes)
+- **Supports Foundry IQ** - Works with knowledge base agents and auto-formats citations
 
 ![Screenshot of the chat interface](docs/images/webapp_screenshot.png)
 
@@ -165,6 +166,46 @@ AGENT_CONFIG_SOURCE=portal
 - Point-and-click configuration in the GUI
 
 See [Environment Variables](docs/environment_variables.md) for details.
+
+---
+
+## 🧠 Foundry IQ Support
+
+This accelerator fully supports **Foundry IQ** (knowledge base) agents configured in the Azure AI Foundry portal.
+
+### Features
+
+- **MCP Auto-Approval**: Automatically approves MCP tool calls, so knowledge base queries work seamlessly
+- **Citation Formatting**: Citation markers like `【4:6†source】` are converted to clean footnote-style references with a sources list
+- **Portal Mode Compatible**: Works with agents entirely configured in the Foundry portal
+
+### Setup
+
+1. Create your Foundry IQ knowledge base in Azure AI Foundry
+2. Configure your agent with the knowledge base tool in the portal
+3. Set your `.env` to use portal mode:
+
+```bash
+AGENT_CONFIG_SOURCE=portal
+AZURE_AI_AGENT_NAME=your-foundry-iq-agent-name
+```
+
+4. Run the accelerator - it will automatically connect to your agent and handle MCP tool approvals
+
+### How Citations Work
+
+Foundry IQ returns citations in a raw format. This accelerator converts them:
+
+**Before:** `The safety policy requires PPE【4:0†MMC_P7_Safety.md】`
+
+**After:** `The safety policy requires PPE<sup>[1]</sup>`
+
+With a sources section at the bottom:
+```
+---
+📚 Sources:
+[1] MMC P7 Safety
+```
 
 ---
 
