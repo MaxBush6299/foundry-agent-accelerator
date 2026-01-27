@@ -167,6 +167,69 @@ def serialize_sse_event(data: Dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
+def clean_citation_markers(content: str) -> str:
+    """
+    Convert citation markers from Foundry IQ/knowledge base responses into 
+    functional footnote-style references.
+    
+    Citation markers look like: 【4:6†source】, 【4:0†MMC_P7_Safety.md】, etc.
+    These are converted to superscript references like [1], [2] with a 
+    sources list at the bottom.
+    
+    Args:
+        content: The raw response content with citation markers
+        
+    Returns:
+        str: Content with citation markers converted to footnotes
+    """
+    # Pattern matches: 【digits:digits†text】
+    # Examples: 【4:6†source】, 【4:0†MMC_P7_Safety_Program_Overview.md】
+    citation_pattern = r'【(\d+):(\d+)†([^】]*)】'
+    
+    # Find all citations and track unique sources
+    citations = re.findall(citation_pattern, content)
+    
+    if not citations:
+        return content
+    
+    # Build a map of unique sources to reference numbers
+    source_map = {}  # source_name -> reference_number
+    source_list = []  # ordered list of unique sources
+    
+    for doc_id, chunk_id, source_name in citations:
+        # Create a unique key for this source
+        source_key = source_name.strip()
+        if source_key and source_key not in source_map:
+            ref_num = len(source_list) + 1
+            source_map[source_key] = ref_num
+            source_list.append(source_key)
+    
+    # Replace citations with superscript-style references
+    def replace_citation(match):
+        doc_id, chunk_id, source_name = match.groups()
+        source_key = source_name.strip()
+        if source_key and source_key in source_map:
+            ref_num = source_map[source_key]
+            return f'<sup>[{ref_num}]</sup>'
+        return ''  # Remove if source is empty
+    
+    cleaned = re.sub(citation_pattern, replace_citation, content)
+    
+    # Clean up any double spaces left behind
+    cleaned = re.sub(r'  +', ' ', cleaned)
+    
+    # Add sources section at the bottom if we have any
+    if source_list:
+        sources_section = "\n\n---\n\n**📚 Sources:**\n"
+        for i, source in enumerate(source_list, 1):
+            # Clean up the source name for display
+            display_name = source.replace('_', ' ').replace('.md', '')
+            sources_section += f"\n[{i}] *{display_name}*"
+        cleaned += sources_section
+    
+    return cleaned
+
+
 def format_code_interpreter_output(content: str) -> str:
     """
     Detect and wrap raw code interpreter output in markdown code fences.
@@ -413,121 +476,178 @@ async def chat_stream_handler(
             if image_gen_deployment:
                 extra_headers["x-ms-oai-image-generation-deployment"] = image_gen_deployment
             
-            # Call the agent using the responses API with streaming
-            # The extra_body specifies which agent to use
-            response = openai_client.responses.create(
-                input=input_messages,
-                stream=True,
-                extra_headers=extra_headers if extra_headers else None,
-                extra_body={
-                    "agent": {
-                        "name": agent.name,
-                        "type": "agent_reference"
-                    }
-                },
-            )
+            # -----------------------------------------------------------------
+            # MCP AUTO-APPROVAL LOOP
+            # -----------------------------------------------------------------
+            # Some agents use MCP tools that require approval. When an
+            # mcp_approval_request is received, we automatically approve it
+            # and continue the conversation. This loop handles multiple
+            # rounds of approval if needed.
+            # -----------------------------------------------------------------
             
-            # Process the streaming response
-            for event in response:
-                event_type = getattr(event, 'type', None)
-                
-                # Handle text output done event
-                if event_type == 'response.output_text.done':
-                    if hasattr(event, 'text') and event.text:
-                        accumulated_message += event.text
-                        yield serialize_sse_event({
-                            "content": event.text,
-                            "type": "message",
-                        })
-                        logger.info(f"Text output: {event.text[:100]}...")
-                
-                # Handle partial image event (streaming partial images)
-                elif event_type == 'response.image_generation_call.partial_image':
-                    if hasattr(event, 'partial_image_b64') and event.partial_image_b64:
-                        # Use raw HTML img tag instead of markdown (more reliable with base64)
-                        image_html = f'<img src="data:image/png;base64,{event.partial_image_b64}" alt="Generated Image (partial)" style="max-width: 100%; border-radius: 8px;" />'
-                        yield serialize_sse_event({
-                            "content": image_html,
-                            "type": "message",
-                        })
-                        logger.info("Sent partial image")
-                
-                # Handle output item done event (contains completed image)
-                elif event_type == 'response.output_item.done':
-                    if hasattr(event, 'item') and event.item:
-                        item = event.item
-                        item_type = getattr(item, 'type', None)
-                        logger.info(f"Output item done - type: {item_type}")
-                        
-                        if item_type == 'image_generation_call':
-                            # Get the result (base64 image data)
-                            if hasattr(item, 'result') and item.result:
-                                image_base64 = item.result
-                                # Use raw HTML img tag instead of markdown (more reliable with base64)
-                                image_html = f'\n\n<img src="data:image/png;base64,{image_base64}" alt="Generated Image" style="max-width: 100%; border-radius: 8px; margin: 16px 0;" />\n\n'
-                                accumulated_message += image_html
-                                yield serialize_sse_event({
-                                    "content": image_html,
-                                    "type": "message",
-                                })
-                                logger.info("Image generation completed - sent final image")
-                
-                # Handle response completed event (final response with all outputs)
-                elif event_type == 'response.completed':
-                    if hasattr(event, 'response') and event.response:
-                        resp = event.response
-                        if hasattr(resp, 'output') and resp.output:
-                            for output_item in resp.output:
-                                item_type = getattr(output_item, 'type', None)
-                                if item_type == 'image_generation_call' and hasattr(output_item, 'result') and output_item.result:
-                                    # Only add if not already sent
-                                    if 'Generated Image' not in accumulated_message:
-                                        image_base64 = output_item.result
-                                        # Use raw HTML img tag instead of markdown (more reliable with base64)
-                                        image_html = f'\n\n<img src="data:image/png;base64,{image_base64}" alt="Generated Image" style="max-width: 100%; border-radius: 8px; margin: 16px 0;" />\n\n'
-                                        accumulated_message += image_html
-                                        yield serialize_sse_event({
-                                            "content": image_html,
-                                            "type": "message",
-                                        })
-                                        logger.info("Image from completed response")
-                                elif item_type == 'message' and hasattr(output_item, 'content'):
-                                    for content_part in output_item.content:
-                                        if hasattr(content_part, 'text') and content_part.text:
-                                            if content_part.text not in accumulated_message:
-                                                accumulated_message += content_part.text
-                                                yield serialize_sse_event({
-                                                    "content": content_part.text,
-                                                    "type": "message",
-                                                })
-                
-                # Fallback: Check for text content in legacy format
-                elif hasattr(event, 'output_text') and event.output_text:
-                    chunk_text = event.output_text
-                    if chunk_text and chunk_text != accumulated_message:
-                        new_content = chunk_text[len(accumulated_message):]
-                        if new_content:
-                            accumulated_message = chunk_text
-                            yield serialize_sse_event({
-                                "content": new_content,
-                                "type": "message",
-                            })
-                
-                # Handle delta-style streaming (if available)
-                elif hasattr(event, 'delta') and event.delta:
-                    delta_text = event.delta
-                    if delta_text:
-                        accumulated_message += delta_text
-                        yield serialize_sse_event({
-                            "content": delta_text,
-                            "type": "message",
-                        })
+            current_input = input_messages
+            max_approval_rounds = 10  # Prevent infinite loops
+            approval_round = 0
             
-            # Send the complete message at the end
+            while approval_round < max_approval_rounds:
+                approval_round += 1
+                pending_approvals = []
+                response_id = None
+                
+                # Call the agent using the responses API with streaming
+                # The extra_body specifies which agent to use
+                response = openai_client.responses.create(
+                    input=current_input,
+                    stream=True,
+                    extra_headers=extra_headers if extra_headers else None,
+                    extra_body={
+                        "agent": {
+                            "name": agent.name,
+                            "type": "agent_reference"
+                        }
+                    },
+                )
+                
+                # Process the streaming response
+                for event in response:
+                    event_type = getattr(event, 'type', None)
+                    
+                    # Capture response ID for follow-up requests
+                    if event_type == 'response.created':
+                        if hasattr(event, 'response') and hasattr(event.response, 'id'):
+                            response_id = event.response.id
+                    
+                    # Handle text output done event
+                    elif event_type == 'response.output_text.done':
+                        if hasattr(event, 'text') and event.text:
+                            text_content = event.text
+                            
+                            # Check if this looks like MCP tool JSON data
+                            # (internal agent data that shouldn't be shown raw)
+                            stripped_text = text_content.strip()
+                            if stripped_text.startswith('{') and stripped_text.endswith('}'):
+                                try:
+                                    # Try to parse as JSON - if successful, format it nicely
+                                    parsed_json = json.loads(stripped_text)
+                                    
+                                    # Check if it's an MCP/tool request (has specific keys)
+                                    if 'request' in parsed_json or 'knowledgeAgentIntents' in parsed_json:
+                                        # Format as a visible tool call indicator with code block
+                                        formatted_json = json.dumps(parsed_json, indent=2)
+                                        text_content = f'\n\n> 🔍 **Querying knowledge base...**\n\n```json\n{formatted_json}\n```\n\n---\n\n'
+                                        logger.info(f"Formatted MCP tool JSON for display")
+                                except json.JSONDecodeError:
+                                    # Not valid JSON, show as-is
+                                    pass
+                            
+                            # Buffer content - don't stream to avoid duplication issues
+                            accumulated_message += text_content
+                            logger.info(f"Text output (buffered): {event.text[:100]}...")
+                    
+                    # Handle partial image event (streaming partial images)
+                    elif event_type == 'response.image_generation_call.partial_image':
+                        if hasattr(event, 'partial_image_b64') and event.partial_image_b64:
+                            # Buffer partial image (will show final in completed_message)
+                            logger.info("Partial image received (buffering)")
+                    
+                    # Handle output item done event (contains completed items including MCP approvals)
+                    elif event_type == 'response.output_item.done':
+                        if hasattr(event, 'item') and event.item:
+                            item = event.item
+                            item_type = getattr(item, 'type', None)
+                            logger.info(f"Output item done - type: {item_type}")
+                            
+                            # Handle MCP approval requests - collect for auto-approval
+                            if item_type == 'mcp_approval_request':
+                                approval_id = getattr(item, 'id', None)
+                                tool_name = getattr(item, 'name', 'unknown')
+                                server_label = getattr(item, 'server_label', 'unknown')
+                                arguments = getattr(item, 'arguments', '{}')
+                                
+                                if approval_id:
+                                    pending_approvals.append({
+                                        'id': approval_id,
+                                        'name': tool_name,
+                                        'server_label': server_label,
+                                        'arguments': arguments
+                                    })
+                                    logger.info(f"MCP approval request collected: {tool_name} (server: {server_label})")
+                                    
+                                    # Buffer tool notification (will be included in final message)
+                                    accumulated_message += f"\n\n🔧 *Using tool: {tool_name}...*\n\n"
+                            
+                            elif item_type == 'mcp_list_tools':
+                                # MCP server is listing available tools - just log it
+                                logger.info("MCP tools list received")
+                            
+                            elif item_type == 'image_generation_call':
+                                # Get the result (base64 image data)
+                                if hasattr(item, 'result') and item.result:
+                                    image_base64 = item.result
+                                    # Buffer image HTML (will be sent in completed_message)
+                                    image_html = f'\n\n<img src="data:image/png;base64,{image_base64}" alt="Generated Image" style="max-width: 100%; border-radius: 8px; margin: 16px 0;" />\n\n'
+                                    accumulated_message += image_html
+                                    logger.info("Image generation completed (buffered)")
+                    
+                    # Handle response completed event (final response with all outputs)
+                    elif event_type == 'response.completed':
+                        if hasattr(event, 'response') and event.response:
+                            resp = event.response
+                            if hasattr(resp, 'output') and resp.output:
+                                for output_item in resp.output:
+                                    item_type = getattr(output_item, 'type', None)
+                                    if item_type == 'image_generation_call' and hasattr(output_item, 'result') and output_item.result:
+                                        # Only add if not already buffered
+                                        if 'Generated Image' not in accumulated_message:
+                                            image_base64 = output_item.result
+                                            image_html = f'\n\n<img src="data:image/png;base64,{image_base64}" alt="Generated Image" style="max-width: 100%; border-radius: 8px; margin: 16px 0;" />\n\n'
+                                            accumulated_message += image_html
+                                            logger.info("Image from completed response (buffered)")
+                                    # Note: We don't process 'message' type here anymore
+                                    # because it was already buffered via response.output_text.done
+                    
+                    # Note: Legacy fallback handlers (output_text, delta) are disabled
+                    # when using MCP agents to prevent duplicate output. The content
+                    # is buffered and sent once via completed_message.
+                
+                # -----------------------------------------------------------------
+                # CHECK FOR PENDING MCP APPROVALS
+                # -----------------------------------------------------------------
+                # If we collected any approval requests, send approvals and continue
+                # -----------------------------------------------------------------
+                
+                if pending_approvals:
+                    logger.info(f"Auto-approving {len(pending_approvals)} MCP tool request(s)")
+                    
+                    # Build approval responses
+                    approval_responses = []
+                    for approval in pending_approvals:
+                        approval_responses.append({
+                            "type": "mcp_approval_response",
+                            "approval_request_id": approval['id'],
+                            "approve": True,
+                            "reason": "Auto-approved by Foundry Agent Accelerator"
+                        })
+                    
+                    # Set up the next request with approval responses
+                    current_input = approval_responses
+                    logger.info(f"Sending approval responses, round {approval_round}")
+                    
+                    # Continue the loop to process the response after approval
+                    continue
+                else:
+                    # No pending approvals, we're done
+                    break
+            
+            if approval_round >= max_approval_rounds:
+                logger.warning(f"Reached maximum approval rounds ({max_approval_rounds})")
+            
+            # Send the complete buffered message
             logger.info(f"Response complete: {len(accumulated_message)} characters")
             
-            # Format code interpreter output before sending
-            formatted_message = format_code_interpreter_output(accumulated_message)
+            # Clean up citation markers and format code interpreter output
+            cleaned_message = clean_citation_markers(accumulated_message)
+            formatted_message = format_code_interpreter_output(cleaned_message)
             
             yield serialize_sse_event({
                 "content": formatted_message,

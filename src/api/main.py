@@ -423,6 +423,9 @@ async def lifespan(app: fastapi.FastAPI):
         
         logger.info(f"Connecting to agent: {agent_name}")
         
+        # In portal mode, tools are managed in the portal, not locally
+        tools_config = {}
+        
         try:
             agent = project_client.agents.get(agent_name)
             agent_version = getattr(agent, 'version', 'latest')
