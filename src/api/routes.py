@@ -512,6 +512,10 @@ async def chat_stream_handler(
                 for event in response:
                     event_type = getattr(event, 'type', None)
                     
+                    # Log all event types for debugging MCP issues
+                    if event_type and event_type not in ['response.output_text.delta']:
+                        logger.debug(f"Event received: {event_type}")
+                    
                     # Capture response ID for follow-up requests
                     if event_type == 'response.created':
                         if hasattr(event, 'response') and hasattr(event.response, 'id'):
@@ -565,11 +569,19 @@ async def chat_stream_handler(
                                 arguments = getattr(item, 'arguments', '{}')
                                 
                                 if approval_id:
+                                    # Store the full item for inclusion in the next request
                                     pending_approvals.append({
                                         'id': approval_id,
                                         'name': tool_name,
                                         'server_label': server_label,
-                                        'arguments': arguments
+                                        'arguments': arguments,
+                                        'original_item': {
+                                            'type': 'mcp_approval_request',
+                                            'id': approval_id,
+                                            'name': tool_name,
+                                            'server_label': server_label,
+                                            'arguments': arguments
+                                        }
                                     })
                                     logger.info(f"MCP approval request collected: {tool_name} (server: {server_label})")
                                     
@@ -579,6 +591,24 @@ async def chat_stream_handler(
                             elif item_type == 'mcp_list_tools':
                                 # MCP server is listing available tools - just log it
                                 logger.info("MCP tools list received")
+                            
+                            elif item_type == 'mcp_call':
+                                # MCP tool call completed - log the result for debugging
+                                tool_name = getattr(item, 'name', 'unknown')
+                                error = getattr(item, 'error', None)
+                                
+                                # Log the full MCP call details for debugging
+                                arguments = getattr(item, 'arguments', None)
+                                server_label = getattr(item, 'server_label', 'unknown')
+                                logger.info(f"MCP call details - tool: {tool_name}, server: {server_label}, args: {arguments}")
+                                
+                                if error:
+                                    logger.error(f"MCP tool '{tool_name}' failed: {error}")
+                                    accumulated_message += f"\n\n⚠️ *Tool error: {tool_name} - {error}*\n\n"
+                                else:
+                                    # MCP calls typically don't expose result directly in the item
+                                    # The result is processed by the agent and appears in the text output
+                                    logger.info(f"MCP tool '{tool_name}' call completed")
                             
                             elif item_type == 'image_generation_call':
                                 # Get the result (base64 image data)
@@ -619,18 +649,24 @@ async def chat_stream_handler(
                 if pending_approvals:
                     logger.info(f"Auto-approving {len(pending_approvals)} MCP tool request(s)")
                     
-                    # Build approval responses
-                    approval_responses = []
+                    # Build input with both original approval requests and responses
+                    # The API requires the original requests to be passed alongside responses
+                    approval_input = []
+                    
+                    # First, add all the original approval request items
                     for approval in pending_approvals:
-                        approval_responses.append({
+                        approval_input.append(approval['original_item'])
+                    
+                    # Then, add all the approval responses
+                    for approval in pending_approvals:
+                        approval_input.append({
                             "type": "mcp_approval_response",
                             "approval_request_id": approval['id'],
-                            "approve": True,
-                            "reason": "Auto-approved by Foundry Agent Accelerator"
+                            "approve": True
                         })
                     
-                    # Set up the next request with approval responses
-                    current_input = approval_responses
+                    # Set up the next request with both requests and responses
+                    current_input = approval_input
                     logger.info(f"Sending approval responses, round {approval_round}")
                     
                     # Continue the loop to process the response after approval
