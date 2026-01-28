@@ -51,9 +51,9 @@ Unlike simple chat apps, this accelerator creates a **real agent** in Azure AI F
 - Python 3.10+ installed (for local development)
 - Azure CLI or Azure Developer CLI installed (for Azure deployment)
 
-### Option 1: Run Locally (Recommended for Getting Started)
+### Run Locally 
 
-The fastest way to get up and running. Perfect for testing and development.
+The fastest way to get up and running. Perfect for agent testing and development.
 
 ```bash
 # 1. Clone and navigate to the project
@@ -74,23 +74,7 @@ uvicorn api.main:app --reload
 
 Open http://localhost:8000 in your browser.
 
-### Option 2: Deploy to Azure
 
-Once you're happy with your agent, deploy it to Azure for production use.
-
-```bash
-# 1. Clone this repository
-git clone https://github.com/MaxBush6299/foundry-agent-accelerator.git
-cd foundry-agent-accelerator
-
-# 2. Login to Azure
-azd auth login
-
-# 3. Deploy everything to Azure
-azd up
-```
-
-After deployment (~10-15 minutes), you'll get a URL to your running agent!
 
 **On startup, you'll see:**
 ```
