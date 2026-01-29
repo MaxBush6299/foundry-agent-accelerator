@@ -36,6 +36,7 @@ Unlike simple chat apps, this accelerator creates a **real agent** in Azure AI F
 - [Quick Start](#-quick-start)
 - [Project Structure](#-project-structure)
 - [How to Customize Your Agent](#-how-to-customize-your-agent)
+- [Using GitHub Copilot to Configure Your Agent](#-using-github-copilot-to-configure-your-agent)
 - [Understanding the Architecture](#-understanding-the-architecture)
 - [Deployment](#-deployment)
 - [Troubleshooting](#-troubleshooting)
@@ -251,6 +252,49 @@ AZURE_AI_AGENT_NAME=customer-support-agent
 ```
 
 This is the name that appears in the Azure AI Foundry portal.
+
+---
+
+## 🤖 Using GitHub Copilot to Configure Your Agent
+
+This project includes built-in instructions that help **GitHub Copilot** configure your agent. Just ask Copilot in natural language!
+
+### Example Prompts
+
+Try these in the VS Code Chat view:
+
+- *"Create a customer support agent for my company"*
+- *"Configure this as an image analysis agent"*
+- *"What tools are available for my agent?"*
+- *"Enable web search for my agent"*
+- *"Change the agent personality to be more formal"*
+
+Copilot will automatically read the project's configuration guidelines and edit the right files (`system.txt` and `agent.yaml`).
+
+### Manually Attach Instructions
+
+If Copilot doesn't pick up the instructions automatically, you can attach them manually:
+
+1. Open the **Chat view** in VS Code
+2. Click **Add Context** (or use the `@` symbol)
+3. Select **Instructions**
+4. Choose `.github/instructions/agent-configuration.instructions.md`
+5. Ask your question
+
+This ensures Copilot has full context about how to configure your agent.
+
+### What the Instructions Cover
+
+The included instructions guide Copilot to:
+
+| Aspect | Guidance |
+|--------|----------|
+| System prompt structure | Personality, capabilities, restrictions, examples |
+| Tool configuration | Which tools to enable and how to set them up |
+| Best practices | Concise prompts, escalation paths, limitations |
+| Example configurations | Customer support, research, data analysis agents |
+
+---
 
 ### Environment Variables
 
